@@ -57,6 +57,16 @@ GPTK 4 Beta 2 (`--runtime wine-gptk4`; the runtime dir is selected through `YAAG
 | Second (warm cache) | Idle | 57.9 | 51.3 ms | 142.6 ms | 7 |
 | Second (warm cache) | Turn | 59.4 | 28.3 ms | 135.7 ms | 2 |
 
-GPTK's turn stutter is mostly D3DMetal shader compilation. Its cache is `$TMPDIR/../C/d3dm`, and the second run through the same area is smooth. Idle hitches remain; DXMT has none. In the spawn-area screenshots, DXMT and GPTK show the same background haze: luma 160.6 vs 159.9, contrast 36.7 vs 35.0. Missing volumetric fog is not reproduced there. Scenes where the fog is prominent (forest, night, god rays) are not covered by the script. DXMT stays the default.
+Cold-cache turn phase (shader caches moved aside for the run, then restored; `$TMPDIR/../C/d3dm/YuanShen.exe` for GPTK, `$TMPDIR/../C/dxmt/YuanShen.exe` for DXMT):
+
+| Backend | Option | Hitches > 50 ms | p99 |
+| --- | --- | --- | --- |
+| DXMT | — | 19 | 113.8 ms |
+| GPTK | `D3DM_MTL4=1` | 16, 9 | 104.5, 52.3 ms |
+| GPTK | `D3DM_MTL4=0` | 8, 12 | 54.3, 73.2 ms |
+
+Turn stutter is first-use shader compilation on both backends. The cache is filled per area and the next pass is smooth (warm: 0–2 hitches on both). The user's GPTK stutter came from a young cache: 59 MB for GPTK vs 272 MB for DXMT. D3DMetal has no async or cache option among its `D3DM_*` variables, and `D3DM_MTL4` / `D3DM_MAX_FPS` made no consistent difference.
+
+Volumetric fog was checked with the scene's own setting, using `--grade 9=1` (fog off) at the spawn point. Background luma was 160.6 for DXMT with fog on, 125.5 for DXMT with fog off, and 159.9 for GPTK with fog on. The fog is rendered, and GPTK renders it like DXMT. DXMT stays the default.
 
 `gamemode=on` means `gamepolicyd` reported both `isIdentifiedGame=1` and `isGameFullscreen=1` (logged in `logs/gamehost.log`). Game progress can be checked in `wineprefix/drive_c/users/crossover/AppData/LocalLow/miHoYo/原神/output_log.txt` (`Genshin Start Log:` lines).

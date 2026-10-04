@@ -11,6 +11,7 @@
 """
 
 import argparse
+import json
 import os
 import re
 import signal
@@ -238,6 +239,38 @@ class GameModeLog:
         self.f.close()
 
 
+GENERAL_DATA = '"GENERAL_DATA_h2389025596"=hex:'
+
+
+def set_grades(changes):
+    """Set Genshin custom graphics grades (e.g. {9: 1} = volumetric fog off)
+    in the prefix's user.reg while Wine is stopped. Returns the previous
+    values for restoring."""
+    reg = Path(PREFIX) / "user.reg"
+    text = reg.read_text(encoding="utf-8", errors="surrogateescape")
+    i = text.index(GENERAL_DATA) + len(GENERAL_DATA)
+    j = i
+    while True:  # value continues over "\\\n" line breaks
+        k = text.index("\n", j)
+        if not text[k - 1] == "\\":
+            break
+        j = k + 1
+    raw = bytes(int(x, 16) for x in re.sub(r"[\\\s]", "", text[i:k]).split(",") if x)
+    data = json.loads(raw.rstrip(b"\0").decode())
+    gfx = json.loads(data["graphicsData"])
+    before = {}
+    for g in gfx["customVolatileGrades"]:
+        if g["key"] in changes:
+            before[g["key"]] = g["value"]
+            g["value"] = changes[g["key"]]
+    gfx["currentVolatielGrade"] = -1
+    data["graphicsData"] = json.dumps(gfx, separators=(",", ":"))
+    new = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode() + b"\0"
+    reg.write_text(text[:i] + ",".join(f"{b:02x}" for b in new) + text[k:], encoding="utf-8",
+                   errors="surrogateescape")
+    return before
+
+
 def gamepolicy_state():
     """gamepolicyd's own verdict for the game process, logged by the injected
     gamehost dylib: Game Mode applies when the process is an identified game
@@ -268,9 +301,15 @@ def cmd_watch(a):
         if yaagl_pids():
             sys.exit("Yaagl is already running; quit it first (autolaunch only applies at startup).")
         kill_prefix(a.prefix, quiet=True)
+    restore_grades = None
+    if a.grade:
+        changes = {int(k): int(v) for k, v in (g.split("=") for g in a.grade)}
+        restore_grades = set_grades(changes)
+        say(f"graphics grades set {changes} (was {restore_grades})")
     gm = GameModeLog(log_path)
     if a.launch:
         envs = ["YAAGL_AUTOLAUNCH=1"]
+        envs += a.env or []
         if a.runtime != "wine":
             envs.append(f"YAAGL_WINE_RUNTIME={DATA / a.runtime}")
         if a.autoplay:
@@ -361,6 +400,9 @@ def cmd_watch(a):
         for l in GAMEHOST_LOG.read_text(errors="replace").splitlines():
             if l.startswith(("frames:", "shot:", "autoplay:", "dev:")):
                 say(l)
+        if restore_grades:
+            set_grades(restore_grades)
+            say(f"graphics grades restored {restore_grades}")
         say(f"SUMMARY reason={reason} last={last} wine_left={remaining} gamemode_log={log_path}")
 
 
@@ -384,6 +426,8 @@ def main():
     w.add_argument("--autoplay", action="store_true",
                    help="enter the game, measure frame times idle and while turning the camera, save screenshots")
     w.add_argument("--runtime", default="wine", help="Wine runtime directory under the data dir (e.g. wine-gptk4)")
+    w.add_argument("--env", action="append", help="extra KEY=VALUE environment for Yaagl and the game")
+    w.add_argument("--grade", action="append", help="Genshin custom graphics grade KEY=VALUE for this run (9=1: volumetric fog off)")
     w.add_argument("--turn", type=float, default=12, help="camera-turn phase length (s) with --autoplay")
     w.add_argument("--verbose", action="store_true", help="print gamepolicyd log lines")
     w.set_defaults(fn=cmd_watch)
