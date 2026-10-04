@@ -267,6 +267,11 @@ PATH_LAUNCH="$(dirname "$CONTENTS_DIR")" exec "$SCRIPT_DIR/${appname}" --path="$
   await fs.copy(path.resolve(process.cwd(), `sidecar`), sidecarDst, {
     preserveTimestamps: true,
   });
+  // Game Mode helpers (native full screen + game app identity)
+  await execa("sh", [
+    path.resolve(process.cwd(), "native", "gamehost", "build.sh"),
+    path.resolve(sidecarDst, "gamehost"),
+  ]);
   // Remove protonextras for hkrpg
   if (["hkrpgcn", "hkrpgos"].includes(process.env["YAAGL_CHANNEL_CLIENT"])) {
     await fs.remove(path.resolve(sidecarDst, "protonextras"));

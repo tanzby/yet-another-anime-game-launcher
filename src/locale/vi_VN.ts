@@ -112,6 +112,7 @@ export const vi_VN: typeof zh_CN = {
 
   SETTING_BLOCK_NET: "Launch Fix(block hosts)",
   SETTING_TIMEOUT_FIX: "Timeout Fix",
+  SETTING_GAME_MODE: "Toàn màn hình gốc + Chế độ trò chơi",
   SETTING_LICENSES: en.SETTING_LICENSES, // TODO: Translate
   SETTING_ENABLE_HDR: "Bật HDR",
 

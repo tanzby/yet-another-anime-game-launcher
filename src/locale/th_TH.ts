@@ -110,6 +110,7 @@ export const th_TH: typeof zh_CN = {
 
   SETTING_BLOCK_NET: "Launch Fix(block hosts)",
   SETTING_TIMEOUT_FIX: "Timeout Fix",
+  SETTING_GAME_MODE: "เต็มหน้าจอแบบเนทีฟ + โหมดเกม",
   SETTING_LICENSES: en.SETTING_LICENSES, // TODO: Translate
   SETTING_ENABLE_HDR: "เปิดใช้ HDR",
 

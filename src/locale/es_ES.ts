@@ -110,6 +110,7 @@ export const es_ES: typeof zh_CN = {
 
   SETTING_BLOCK_NET: en.SETTING_BLOCK_NET,
   SETTING_TIMEOUT_FIX: "Timeout Fix",
+  SETTING_GAME_MODE: "Pantalla completa nativa + Modo Juego",
   SETTING_LICENSES: "Licencias",
 
   SETTING_ENABLE_HDR: "Activar HDR",

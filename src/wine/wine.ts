@@ -69,6 +69,45 @@ export async function createWine(options: {
     });
   }
 
+  /**
+   * Stop everything running in this prefix: ask wineserver to kill its
+   * processes, then kill leftovers it no longer tracks (e.g. a winedevice.exe
+   * orphaned after wineserver died).
+   */
+  async function shutdown() {
+    try {
+      await unixExec([join(dirname(loaderBin), "wineserver"), "-k"], {
+        ...getEnvironmentVariables(),
+      });
+    } catch {
+      // no server running
+    }
+    // Every process of a prefix maps files from its server directory,
+    // /tmp/.wine-<uid>/server-<dev>-<inode of the prefix>; orphans whose
+    // server died are caught by their working directory inside the prefix.
+    // (build() escapes newlines, so the script is a single line.)
+    const script = [
+      `dir="/tmp/.wine-$(id -u)/server-$(printf %x $(stat -f %d "$1"))-$(printf %x $(stat -f %i "$1"))"`,
+      `{ lsof -t +d "$dir" 2>/dev/null`,
+      `for pid in $(ps -axo pid=,command= | awk '$2 ~ /^[CZ]:\\\\/ {print $1}'); do cwd=$(lsof -a -d cwd -Fn -p "$pid" 2>/dev/null | sed -n 's/^n//p'); case "$cwd" in "$1"/*) echo "$pid";; esac; done`,
+      `} | sort -u | xargs kill -9 2>/dev/null`,
+      `true`,
+    ].join("; ");
+    await unixExec(["sh", "-c", script, "sh", options.prefix]);
+  }
+
+  /** Wait for the prefix to shut down; force it after timeoutMs. */
+  async function waitUntilServerOffOrShutdown(timeoutMs: number) {
+    const done = await Promise.race([
+      waitUntilServerOff().then(() => true),
+      new Promise<boolean>(res => setTimeout(() => res(false), timeoutMs)),
+    ]);
+    if (!done) {
+      await log(`Wine did not exit within ${timeoutMs}ms, shutting it down`);
+      await shutdown();
+    }
+  }
+
   function toWinePath(absPath: string) {
     return "Z:" + `${absPath}`.replaceAll("/", "\\");
   }
@@ -157,6 +196,8 @@ reg add "HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation\\Global\\NGXCore" /v F
     exec,
     exec2,
     waitUntilServerOff,
+    waitUntilServerOffOrShutdown,
+    shutdown,
     cmd,
     toWinePath,
     prefix: options.prefix,
