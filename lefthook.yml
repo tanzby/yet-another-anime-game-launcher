@@ -1,0 +1,27 @@
+# Local git hooks (installed by `pnpm install` via the "prepare" script).
+# pre-push mirrors the checks in .github/workflows/ci-pr.yaml.
+# Binaries are called directly (not via `pnpm exec`) to keep hooks fast.
+pre-commit:
+  jobs:
+    - name: prettier
+      glob:
+        - "src/*.{ts,tsx}"
+        - "src/**/*.{ts,tsx}"
+      run: node_modules/.bin/prettier --write {staged_files}
+      stage_fixed: true
+    - name: eslint
+      glob:
+        - "src/*.{ts,tsx}"
+        - "src/**/*.{ts,tsx}"
+      run: node_modules/.bin/eslint --fix {staged_files}
+      stage_fixed: true
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: tsc
+      run: node_modules/.bin/tsc
+    - name: format-check
+      run: node_modules/.bin/prettier -c ./src
+    - name: lint
+      run: node_modules/.bin/eslint ./src --ext .ts --ext .tsx
