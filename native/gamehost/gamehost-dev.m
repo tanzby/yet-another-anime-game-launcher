@@ -5,8 +5,9 @@
  *
  *  - frame statistics: every -[CAMetalLayer nextDrawable] is timestamped and
  *    intervals are summarised per phase (p50/p99/max, hitches > 50 ms);
- *  - a scripted session (YAAGL_GAMEHOST_DEV=autoplay): click the window
- *    centre to enter the game, then time an idle and a camera-turn phase
+ *  - a scripted session (YAAGL_GAMEHOST_DEV=autoplay): click into the
+ *    window for a minute to enter the game, then time an idle and a
+ *    camera-turn phase (length YAAGL_GAMEHOST_TURN seconds)
  *    (the turn itself is driven by turner.exe via SendInput);
  *  - screenshots: the previous drawable is copied to a PNG
  *    (YAAGL_GAMEHOST_SHOT_DIR), at the end of each phase.
@@ -15,7 +16,6 @@
 #import <ImageIO/ImageIO.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
-#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
 #import <os/lock.h>
 
@@ -68,6 +68,11 @@ static void reportFrames(const char *phase) {
 static void saveShot(id<CAMetalDrawable> drawable, NSString *path) {
   id<MTLTexture> tex = drawable.texture;
   if (!tex) return;
+  // Drawables are BGRA8 here; other (e.g. 10-bit) formats are not handled.
+  if (tex.pixelFormat != MTLPixelFormatBGRA8Unorm && tex.pixelFormat != MTLPixelFormatBGRA8Unorm_sRGB) {
+    gamehost_say("shot: unsupported pixel format %lu", (unsigned long)tex.pixelFormat);
+    return;
+  }
   NSUInteger w = tex.width, h = tex.height, bpr = w * 4;
   id<MTLDevice> dev = tex.device;
   id<MTLBuffer> buf = [dev newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
@@ -80,17 +85,12 @@ static void saveShot(id<CAMetalDrawable> drawable, NSString *path) {
   [blit endEncoding];
   [cb commit];
   [cb waitUntilCompleted];
-  // Drawables are BGRA (possibly 10-bit formats are not handled: skip them).
-  if (tex.pixelFormat != MTLPixelFormatBGRA8Unorm && tex.pixelFormat != MTLPixelFormatBGRA8Unorm_sRGB) {
-    gamehost_say("shot: unsupported pixel format %lu", (unsigned long)tex.pixelFormat);
-    return;
-  }
   CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
   CGContextRef ctx = CGBitmapContextCreate(buf.contents, w, h, 8, bpr, cs,
                                            kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
   CGImageRef img = CGBitmapContextCreateImage(ctx);
   CGImageDestinationRef dst = CGImageDestinationCreateWithURL(
-      (__bridge CFURLRef)[NSURL fileURLWithPath:path], (__bridge CFStringRef)UTTypePNG.identifier, 1, NULL);
+      (__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL);
   CGImageDestinationAddImage(dst, img, NULL);
   bool ok = CGImageDestinationFinalize(dst);
   CFRelease(dst);
@@ -159,19 +159,13 @@ static void click(void) {
   after(0.08, ^{ postMouse(NSEventTypeLeftMouseUp); });
 }
 
-static double envSeconds(const char *name, double fallback) {
-  const char *v = getenv(name);
-  return v && *v ? atof(v) : fallback;
-}
-
 /* Autoplay: clicks every 5s for CLICK_FOR seconds (enters the game from the
- * title screen and dismisses popups), then measures IDLE seconds standing
- * still and TURN seconds of continuous camera rotation. */
+ * title screen and dismisses popups), waits SETTLE seconds, then measures
+ * IDLE seconds standing still and the turn phase. */
 static void autoplay(void) {
-  double clickFor = envSeconds("YAAGL_GAMEHOST_CLICK_FOR", 60);
-  double settle = envSeconds("YAAGL_GAMEHOST_SETTLE", 20);
-  double idle = envSeconds("YAAGL_GAMEHOST_IDLE", 10);
-  double turn = envSeconds("YAAGL_GAMEHOST_TURN", 12);
+  const double clickFor = 60, settle = 20, idle = 10;
+  const char *turnEnv = getenv("YAAGL_GAMEHOST_TURN");
+  double turn = turnEnv && *turnEnv ? atof(turnEnv) : 12;
   for (double t = 3; t < clickFor; t += 5) after(t, ^{ click(); });
   double t0 = clickFor + settle;
   after(t0, ^{

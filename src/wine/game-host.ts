@@ -1,5 +1,15 @@
 import { join } from "path-browserify";
-import { exec, fileOrDirExists, log, mkdirp, resolve, writeFile } from "@utils";
+import {
+  cp,
+  exec,
+  fileOrDirExists,
+  forceMove,
+  log,
+  mkdirp,
+  readFile,
+  resolve,
+  writeFile,
+} from "@utils";
 
 // Native helpers built from native/gamehost (see build.sh).
 const SHIM = "./sidecar/gamehost/yaagl-wine-shim";
@@ -57,9 +67,8 @@ export async function prepareGameHost(
 ): Promise<{ [key: string]: string }> {
   const shim = resolve(SHIM);
   const dylib = resolve(DYLIB);
-  if (!(await fileOrDirExists(shim)) || !(await fileOrDirExists(dylib))) {
-    return {};
-  }
+  const present = await Promise.all([shim, dylib].map(fileOrDirExists));
+  if (!present.every(Boolean)) return {};
   try {
     const unixDir = join(runtimePath, "lib", "wine", "x86_64-unix");
     const loader = join(unixDir, "wine");
@@ -67,36 +76,45 @@ export async function prepareGameHost(
     if (!(await fileOrDirExists(host))) {
       // A fresh runtime: keep its host as wine-host. Never move the shim there.
       if (await same(shim, loader)) throw new Error("wine-host is missing");
-      await exec(["mv", loader, host]);
+      await forceMove(loader, host);
     }
-    if (!(await same(shim, loader))) await exec(["cp", "-f", shim, loader]);
+    if (!(await same(shim, loader))) await cp(shim, loader);
 
+    // Rebuild and re-register the bundle only when its contents change.
     const contents = join(resolve(BUNDLE), "Contents");
     const exe = join(contents, "MacOS", "wine");
     const source = join(contents, "MacOS", ".wine-host");
-    await mkdirp(join(contents, "MacOS"));
-    await mkdirp(join(contents, "Resources"));
+    const plistPath = join(contents, "Info.plist");
+    const plist = infoPlist(displayName);
+    let changed = false;
     if (!(await same(host, source))) {
-      await exec(["cp", "-f", host, source]);
-      await exec(["cp", "-f", host, exe]);
+      await Promise.all([
+        mkdirp(join(contents, "MacOS")),
+        mkdirp(join(contents, "Resources")),
+      ]);
+      await cp(host, source);
+      await cp(host, exe);
       // The signing identifier must match the bundle identifier, or every
       // getaddrinfo in the process stalls for ~30s.
       await exec(["codesign", "-f", "-s", "-", "-i", BUNDLE_ID, exe]);
+      if (await fileOrDirExists(resolve("./icon.icns"))) {
+        await cp(
+          resolve("./icon.icns"),
+          join(contents, "Resources", "icon.icns")
+        );
+      }
+      changed = true;
     }
-    await writeFile(join(contents, "Info.plist"), infoPlist(displayName));
-    if (await fileOrDirExists(resolve("./icon.icns"))) {
-      await exec([
-        "cp",
-        "-f",
-        resolve("./icon.icns"),
-        join(contents, "Resources", "icon.icns"),
-      ]);
+    if ((await readFile(plistPath).catch(() => "")) !== plist) {
+      await writeFile(plistPath, plist);
+      changed = true;
     }
-    await exec([LSREGISTER, "-f", resolve(BUNDLE)]);
+    if (changed) await exec([LSREGISTER, "-f", resolve(BUNDLE)]);
     return {
       YAAGL_GAME_HOST_EXE: exe,
       YAAGL_GAME_HOST_MATCH: gameExecutable,
-      DYLD_INSERT_LIBRARIES: dylib,
+      // The shim injects it into the game process only.
+      YAAGL_GAME_HOST_DYLIB: dylib,
       YAAGL_GAMEHOST_LOG: resolve("./logs/gamehost.log"),
     };
   } catch (e) {

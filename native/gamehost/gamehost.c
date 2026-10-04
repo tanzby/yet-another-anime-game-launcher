@@ -1,7 +1,7 @@
 /*
- * yaagl-gamehost: injected into Wine processes (DYLD_INSERT_LIBRARIES) to put
- * the game's main window into a native macOS full-screen Space, which is what
- * macOS Game Mode requires. Wine's mac driver only offers native full screen
+ * yaagl-gamehost: injected into the game's Wine process (wine-shim.c sets
+ * DYLD_INSERT_LIBRARIES for it only) to put the game window into a native
+ * macOS full-screen Space, which is what macOS Game Mode requires. Wine's mac driver only offers native full screen
  * for resizable windows, and the game's window is not.
  *
  * Links only libSystem: the Wine host must not load AppKit early, so all
@@ -12,6 +12,7 @@
  * gamehost_getaddrinfo).
  *
  * Env: YAAGL_GAMEHOST_LOG=<file>  optional log file
+ *      YAAGL_GAMEHOST_DEV=<mode>   load yaagl-gamehost-dev.dylib (see there)
  */
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
@@ -45,34 +46,25 @@ typedef struct { double x, y, w, h; } Rect;
 static Class (*getClass)(const char *);
 static SEL (*selName)(const char *);
 static Method (*instanceMethod)(Class, SEL);
-static IMP (*methodImpl)(Method);
 static IMP (*setImpl)(Method, IMP);
 static IMP (*classImpl)(Class, SEL);
 static void *msgSend, *msgSendStret;
 static id *nsApp;
 
 static int logFd = -1;
-static void vsay(const char *fmt, va_list ap) {
+/* Log a line; exported for gamehost-dev.dylib. */
+__attribute__((visibility("default"))) void gamehost_say(const char *fmt, ...) {
   if (logFd < 0) return;
   char buf[512];
+  va_list ap;
+  va_start(ap, fmt);
   int n = vsnprintf(buf, sizeof buf - 1, fmt, ap);
+  va_end(ap);
   if (n > (int)sizeof buf - 2) n = sizeof buf - 2;
   buf[n++] = '\n';
   write(logFd, buf, n);
 }
-static void say(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vsay(fmt, ap);
-  va_end(ap);
-}
-/* Shared with gamehost-dev.dylib. */
-__attribute__((visibility("default"))) void gamehost_say(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  vsay(fmt, ap);
-  va_end(ap);
-}
+#define say gamehost_say
 
 /* YAAGL_GAMEHOST_DEV: load the development companion (frame statistics,
  * scripted input, screenshots) next to this library. */
@@ -100,6 +92,14 @@ static bool sendBool(id o, const char *s) {
 }
 static Rect sendRect(id o, const char *s) {
   return ((Rect(*)(id, SEL))msgSendStret)(o, selName(s));
+}
+static id sendIdAt(id array, unsigned long i) {
+  return ((id(*)(id, SEL, unsigned long))msgSend)(array, selName("objectAtIndex:"), i);
+}
+/* Allow (and keep) native full screen for the window. */
+static void setPrimaryFullscreen(id win, unsigned long behavior) {
+  ((void (*)(id, SEL, unsigned long))msgSend)(
+      win, selName("setCollectionBehavior:"), (behavior | FULLSCREEN_PRIMARY) & ~FULLSCREEN_AUXILIARY);
 }
 
 static Class wineWindowClass;
@@ -148,15 +148,16 @@ static bool isGameWindow(id win) {
 static IMP origAdjust;
 static void hookAdjust(id self, SEL _cmd, unsigned long behavior) {
   if (isGameWindow(self)) {
-    behavior = (behavior | FULLSCREEN_PRIMARY) & ~FULLSCREEN_AUXILIARY;
-    ((void (*)(id, SEL, unsigned long))msgSend)(self, selName("setCollectionBehavior:"), behavior);
+    setPrimaryFullscreen(self, behavior);
     return;
   }
   ((void (*)(id, SEL, unsigned long))origAdjust)(self, _cmd, behavior);
 }
 
 /* After the game window is closed the process should exit; if it is still
- * around this long, it is stuck in shutdown and only keeps Wine alive. */
+ * around this long, it is stuck in shutdown and only keeps Wine alive. The
+ * launcher cannot time this out itself: its wait on steam.exe only returns
+ * once the game process is gone. */
 #define STUCK_EXIT_SECONDS 15
 static double goneSince;
 
@@ -168,7 +169,7 @@ static double now(void) {
 
 static bool targetPresent(id windows, unsigned long n) {
   for (unsigned long i = 0; i < n; i++) {
-    id win = ((id(*)(id, SEL, unsigned long))msgSend)(windows, selName("objectAtIndex:"), i);
+    id win = sendIdAt(windows, i);
     if (win == fullscreenTarget)
       return sendBool(win, "isVisible") || sendBool(win, "isMiniaturized");
   }
@@ -184,7 +185,9 @@ static void tick(void *ctx) {
   if (fullscreenTarget) {
     if (targetPresent(windows, n)) {
       goneSince = 0;
-    } else if (!goneSince) {
+      return; /* in full screen, or the user chose to leave it */
+    }
+    if (!goneSince) {
       goneSince = now();
       say("gamehost: game window closed");
     } else if (now() - goneSince > STUCK_EXIT_SECONDS) {
@@ -193,10 +196,9 @@ static void tick(void *ctx) {
     }
   }
   for (unsigned long i = 0; i < n; i++) {
-    id win = ((id(*)(id, SEL, unsigned long))msgSend)(windows, selName("objectAtIndex:"), i);
+    id win = sendIdAt(windows, i);
     if (!isGameWindow(win)) continue;
-    bool fs = sendUL(win, "styleMask") & STYLE_FULLSCREEN;
-    if (fs || win == fullscreenTarget) return; /* done, or the user left full screen */
+    if (sendUL(win, "styleMask") & STYLE_FULLSCREEN) return;
     if (!policyWatched) {
       /* Subscribe before the transition so the full-screen update is seen;
        * toggle on the next tick. */
@@ -205,9 +207,7 @@ static void tick(void *ctx) {
     }
     fullscreenTarget = win;
     goneSince = 0; /* a recreated game window replaces the closed one */
-    unsigned long b = sendUL(win, "collectionBehavior");
-    ((void (*)(id, SEL, unsigned long))msgSend)(
-        win, selName("setCollectionBehavior:"), (b | FULLSCREEN_PRIMARY) & ~FULLSCREEN_AUXILIARY);
+    setPrimaryFullscreen(win, sendUL(win, "collectionBehavior"));
     ((void (*)(id, SEL, signed char))msgSend)(app, selName("activateIgnoringOtherApps:"), 1);
     /* Call NSWindow's implementation: WineWindow's override refuses for
      * windows Wine does not consider resizable. */
@@ -224,14 +224,13 @@ static void tick(void *ctx) {
  * query, i.e. Local Network access, which macOS silently holds for a bundled
  * app without that permission until it fails ~35s later. Answer it from the
  * interface addresses instead; every other name goes to the real resolver. */
+static char hostName[256]; /* set in init */
 static bool isOwnHostName(const char *node) {
-  char host[256];
-  if (!node || gethostname(host, sizeof host)) return false;
-  host[sizeof host - 1] = 0;
-  if (!strcasecmp(node, host)) return true;
-  size_t n = strlen(host);
-  if (n > 6 && !strcasecmp(host + n - 6, ".local"))
-    return strlen(node) == n - 6 && !strncasecmp(node, host, n - 6);
+  if (!node || !*hostName) return false;
+  if (!strcasecmp(node, hostName)) return true;
+  size_t n = strlen(hostName);
+  if (n > 6 && !strcasecmp(hostName + n - 6, ".local"))
+    return strlen(node) == n - 6 && !strncasecmp(node, hostName, n - 6);
   return false;
 }
 
@@ -271,7 +270,6 @@ static void install(void) {
   getClass = dlsym(RTLD_DEFAULT, "objc_getClass");
   selName = dlsym(RTLD_DEFAULT, "sel_registerName");
   instanceMethod = dlsym(RTLD_DEFAULT, "class_getInstanceMethod");
-  methodImpl = dlsym(RTLD_DEFAULT, "method_getImplementation");
   setImpl = dlsym(RTLD_DEFAULT, "method_setImplementation");
   classImpl = dlsym(RTLD_DEFAULT, "class_getMethodImplementation");
   msgSend = dlsym(RTLD_DEFAULT, "objc_msgSend");
@@ -312,5 +310,7 @@ static void onImage(const struct mach_header *mh, intptr_t slide) {
 __attribute__((constructor)) static void init(void) {
   const char *path = getenv("YAAGL_GAMEHOST_LOG");
   if (path && *path) logFd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+  if (gethostname(hostName, sizeof hostName)) *hostName = 0;
+  hostName[sizeof hostName - 1] = 0;
   _dyld_register_func_for_add_image(onImage);
 }

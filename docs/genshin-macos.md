@@ -11,12 +11,12 @@ Implementation (setting "Native full screen + Game Mode", on by default, `config
 
 - `src/wine/game-host.ts` installs `native/gamehost/wine-shim.c` as `<wine>/lib/wine/x86_64-unix/wine` and keeps the original host as `wine-host`. Wine execs that path for every new Windows process. When `argv[1]` contains the game executable, the shim execs `YaaglGame.app/Contents/MacOS/wine` instead. That file is a copy of `wine-host` in a bundle registered with `lsregister`. All other processes run `wine-host` unchanged.
 - The bundle copy is re-signed with `-i com.3shain.yaagl.game`. If the code-signing identifier differs from the bundle identifier, every `getaddrinfo` in the process stalls for about 35 s.
-- `native/gamehost/gamehost.c` is injected with `DYLD_INSERT_LIBRARIES`. It links only libSystem and attaches once `winemac.so` is loaded. It does four things:
+- `native/gamehost/gamehost.c` is injected into the game process only. The shim sets `DYLD_INSERT_LIBRARIES` from `YAAGL_GAME_HOST_DYLIB` when it execs the game and clears it for the game's child processes. It links only libSystem and attaches once `winemac.so` is loaded. It does four things:
   - moves the game window (at least half the screen) into a native full-screen Space;
   - keeps winemac from dropping the full-screen behavior;
   - logs `gamepolicyd`'s verdict through `GPProcessMonitor` in the private GamePolicy framework;
   - answers lookups of the Mac's own `<host>.local` name from the interface address. That lookup is mDNS, which counts as Local Network access, and the bundled game is silently held about 35 s on it. Other names use the system resolver.
-- The process exits if it is still running 15 s after its window closed.
+- The process exits if it is still running 15 s after its window closed. The launcher cannot time this out itself: its wait on `steam.exe` only returns once the game process is gone.
 
 ## Process cleanup
 
@@ -33,7 +33,7 @@ scripts/dev/yaagl-diag ps
 scripts/dev/yaagl-diag kill --orphans
 ```
 
-`--autoplay` loads `native/gamehost/gamehost-dev.m` into the game (`YAAGL_GAMEHOST_DEV`). It clicks into the world, then logs frame-interval statistics for an idle phase and a camera-turn phase (`frames: … p50/p99/max, hitches50`) and saves a PNG of each from the game's own drawable. The turn is driven by `turner.exe` (`SendInput` inside the prefix). Synthetic AppKit events do not turn the camera. Build it with `LLVM_MINGW=… native/gamehost/build.sh`.
+`--autoplay` loads `native/gamehost/gamehost-dev.m` into the game (`YAAGL_GAMEHOST_DEV`). It clicks into the world, then logs frame-interval statistics for an idle phase and a camera-turn phase (`frames: … p50/p99/max, hitches50`) and saves a PNG of each from the game's own drawable. The turn is driven by `turner.exe` (`SendInput` inside the prefix). Synthetic AppKit events do not turn the camera. These dev pieces are not shipped in the app: `--autoplay` builds them with `native/gamehost/build.sh --dev` into the data dir's sidecar. `turner.exe` needs llvm-mingw (`LLVM_MINGW=/path`).
 
 ```bash
 scripts/dev/yaagl-diag watch --launch --autoplay --timeout 200

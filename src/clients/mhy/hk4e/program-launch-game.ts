@@ -171,7 +171,7 @@ cd /d "${wine.toWinePath(gameDir)}"
     const gamehostEnv = config.gameMode
       ? await prepareGameHost(
           wine.runtimePath,
-          server.id == "hk4e_cn" ? "\u539f\u795e" : "Genshin Impact",
+          server.id == "hk4e_cn" ? "原神" : "Genshin Impact",
           gameExecutable
         )
       : {};

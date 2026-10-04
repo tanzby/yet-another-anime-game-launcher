@@ -1,7 +1,7 @@
 import { FormControl, FormLabel, Box, Checkbox } from "@hope-ui/solid";
 import { createEffect, createSignal } from "solid-js";
 import { Locale } from "@locale";
-import { assertValueDefined, getKey, setKey } from "@utils";
+import { assertValueDefined, getKeyOrDefault, setKey } from "@utils";
 import { Config, NOOP } from "@config/config-def";
 
 declare module "@config/config-def" {
@@ -19,11 +19,7 @@ export default async function ({
   config: Partial<Config>;
   locale: Locale;
 }) {
-  try {
-    config.gameMode = (await getKey(CONFIG_KEY)) != "false";
-  } catch {
-    config.gameMode = true; // default value
-  }
+  config.gameMode = (await getKeyOrDefault(CONFIG_KEY, "true")) != "false";
 
   const [value, setValue] = createSignal(config.gameMode);
 

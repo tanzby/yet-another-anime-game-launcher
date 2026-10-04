@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
-"""Text-only diagnostics for Yaagl's Wine game runs (no screenshots).
-
-  yaagl-diag ps                         Wine processes grouped by WINEPREFIX
-  yaagl-diag kill [--prefix P|--orphans] Prefix-scoped cleanup
-  yaagl-diag window                     Front app, Space type, Wine windows
-  yaagl-diag watch [--launch] [--timeout N] [--until window|fullscreen|exit]
-      Sample every 2s and print state changes. With --launch, start
-      Yaagl.app via YAAGL_AUTOLAUNCH=1. On exit always cleans the prefix and
-      waits for Yaagl to revert its game patches and quit.
-"""
+"""Text diagnostics for Yaagl's Wine game runs: processes, windows, Game
+Mode, and (watch --autoplay) frame times. `watch` always cleans up the prefix
+and waits for Yaagl to revert its game patches and quit. See
+docs/genshin-macos.md."""
 
 import argparse
 import json
@@ -103,8 +97,38 @@ def wine_procs():
     return procs
 
 
+
+
+def is_server(p):
+    return "/wineserver" in p["cmd"]
+
+
+def exe_name(p):
+    return "wineserver" if is_server(p) else re.split(r"[\\\\/]", p["cmd"].split(".exe")[0])[-1] + ".exe"
+
+
 def is_game(p):
-    return any(exe in p["cmd"] for exe in GAME_EXES)
+    return exe_name(p) in GAME_EXES
+
+
+def prefix_procs(prefix):
+    return [p for p in wine_procs() if p["prefix"] == prefix]
+
+
+def live_servers(procs):
+    """Prefixes whose wineserver is running."""
+    return {p["prefix"] for p in procs if is_server(p)}
+
+
+def wine_bin(runtime="wine"):
+    return str(DATA / runtime / "bin/wine")
+
+
+def read_hostlog():
+    try:
+        return GAMEHOST_LOG.read_text(errors="replace")
+    except OSError:
+        return ""
 
 
 def cmd_ps(_):
@@ -112,7 +136,7 @@ def cmd_ps(_):
     if not procs:
         print("no wine processes")
         return
-    servers = {p["prefix"] for p in procs if "/wineserver" in p["cmd"]}
+    servers = live_servers(procs)
     for prefix in sorted({p["prefix"] for p in procs}):
         print(f"prefix {prefix}  wineserver={'yes' if prefix in servers else 'NO'}")
         for p in procs:
@@ -124,8 +148,8 @@ def cmd_ps(_):
 
 
 def wineserver_bin(prefix):
-    for p in wine_procs():
-        if p["prefix"] == prefix and "/wineserver" in p["cmd"]:
+    for p in prefix_procs(prefix):
+        if is_server(p):
             m = re.match(r"(.*?/wineserver)(\s|$)", p["cmd"])
             if m:
                 return m.group(1)
@@ -141,9 +165,9 @@ def kill_prefix(prefix, quiet=False):
     if server:
         run([server, "-k"], env={**os.environ, "WINEPREFIX": prefix}, timeout=10)
     deadline = time.monotonic() + 3
-    while time.monotonic() < deadline and any(p["prefix"] == prefix for p in wine_procs()):
+    while time.monotonic() < deadline and prefix_procs(prefix):
         time.sleep(0.5)
-    left = [p for p in wine_procs() if p["prefix"] == prefix]
+    left = prefix_procs(prefix)
     for sig in (signal.SIGTERM, signal.SIGKILL):
         for p in left:
             try:
@@ -151,7 +175,7 @@ def kill_prefix(prefix, quiet=False):
             except ProcessLookupError:
                 pass
         time.sleep(1)
-        left = [p for p in wine_procs() if p["prefix"] == prefix]
+        left = prefix_procs(prefix)
         if not left:
             break
     if not quiet:
@@ -162,7 +186,7 @@ def kill_prefix(prefix, quiet=False):
 def cmd_kill(a):
     if a.orphans:
         procs = wine_procs()
-        servers = {p["prefix"] for p in procs if "/wineserver" in p["cmd"]}
+        servers = live_servers(procs)
         prefixes = {p["prefix"] for p in procs if p["ppid"] == 1 and p["prefix"] not in servers}
         if not prefixes:
             print("no orphans")
@@ -183,7 +207,7 @@ def window_probe(pids):
 
 
 def snapshot(prefix):
-    procs = [p for p in wine_procs() if p["prefix"] == prefix]
+    procs = prefix_procs(prefix)
     lines = window_probe([p["pid"] for p in procs])
     screens = [tuple(map(int, re.findall(r"[wh]=(\d+)", l))) for l in lines if l.startswith("screen")]
     wins = [l for l in lines if l.startswith("window")]
@@ -204,10 +228,8 @@ def snapshot(prefix):
     space = ",".join(re.search(r"type=(\S+)", l).group(1) for l in lines if l.startswith("space"))
     return {
         "procs": len(procs),
-        "names": "+".join(sorted({
-            "wineserver" if "/wineserver" in p["cmd"] else re.split(r"[\\\\/]", p["cmd"].split(".exe")[0])[-1] + ".exe"
-            for p in procs})),
-        "game": "running" if game else "none",
+        "names": "+".join(sorted({exe_name(p) for p in procs})),
+        "game": exe_name(game[0]) if game else "none",
         "game_tcp": net,
         "windows": len(wins),
         "covers_screen": covers,
@@ -253,7 +275,7 @@ def set_grades(changes):
     j = i
     while True:  # value continues over "\\\n" line breaks
         k = text.index("\n", j)
-        if not text[k - 1] == "\\":
+        if text[k - 1] != "\\":
             break
         j = k + 1
     raw = bytes(int(x, 16) for x in re.sub(r"[\\\s]", "", text[i:k]).split(",") if x)
@@ -272,14 +294,10 @@ def set_grades(changes):
     return before
 
 
-def gamepolicy_state():
+def gamepolicy_state(text):
     """gamepolicyd's own verdict for the game process, logged by the injected
     gamehost dylib: Game Mode applies when the process is an identified game
     and in game full screen. Returns on/off/unknown."""
-    try:
-        text = GAMEHOST_LOG.read_text(errors="replace")
-    except OSError:
-        return "unknown"
     vals = dict(re.findall(r"gamepolicy: \w+ (\w+)=(\d)", text))
     if not vals:
         return "unknown"
@@ -292,25 +310,24 @@ def gpu_utilization():
     return int(m.group(1)) if m else None
 
 
+def autoplay_phase(text):
+    return ("done" if "autoplay: done" in text else "turn" if "turn phase" in text
+            else "idle" if "idle phase" in text else None)
+
+
 class GpuSampler(threading.Thread):
-    """Samples GPU utilisation every 0.5s, grouped by the autoplay phase
-    currently announced in the gamehost log."""
+    """Samples GPU utilisation every 0.5s into the current autoplay phase
+    (set by the watch loop)."""
 
     def __init__(self):
         super().__init__(daemon=True)
-        self.samples, self.stop_flag = {}, False
+        self.samples, self.stop_flag, self.phase = {}, False, None
 
     def run(self):
         while not self.stop_flag:
-            try:
-                text = GAMEHOST_LOG.read_text(errors="replace")
-            except OSError:
-                text = ""
-            phase = ("done" if "autoplay: done" in text else "turn" if "turn phase" in text
-                     else "idle" if "idle phase" in text else None)
             util = gpu_utilization()
-            if phase in ("idle", "turn") and util is not None:
-                self.samples.setdefault(phase, []).append(util)
+            if self.phase in ("idle", "turn") and util is not None:
+                self.samples.setdefault(self.phase, []).append(util)
             time.sleep(0.5)
 
     def report(self):
@@ -339,13 +356,21 @@ def cmd_watch(a):
         changes = {int(k): int(v) for k, v in (g.split("=") for g in a.grade)}
         restore_grades = set_grades(changes)
         say(f"graphics grades set {changes} (was {restore_grades})")
-    gm = GameModeLog(log_path)
+    gm = GameModeLog(log_path) if a.verbose else None
     if a.launch:
         envs = ["YAAGL_AUTOLAUNCH=1"]
         envs += a.env or []
         if a.runtime != "wine":
             envs.append(f"YAAGL_WINE_RUNTIME={DATA / a.runtime}")
         if a.autoplay:
+            # Dev-only pieces are not shipped in the app; build them into the
+            # data dir's sidecar (left alone by Yaagl's resource sync).
+            build = Path(__file__).resolve().parents[2] / "native/gamehost/build.sh"
+            r = run(["sh", str(build), "--dev", str(DATA / "sidecar/gamehost")])
+            if r.returncode:
+                sys.exit(f"building dev helpers failed: {r.stderr}")
+            if not (DATA / "sidecar/gamehost/turner.exe").exists():
+                say("turner.exe missing (set LLVM_MINGW): the camera will not turn")
             shots = CACHE / "shots"
             shots.mkdir(parents=True, exist_ok=True)
             envs += ["YAAGL_GAMEHOST_DEV=autoplay", f"YAAGL_GAMEHOST_SHOT_DIR={shots}",
@@ -361,38 +386,38 @@ def cmd_watch(a):
     try:
         while time.monotonic() - T0 < a.timeout:
             s = snapshot(a.prefix)
-            s["gamemode"] = gamepolicy_state()
+            hostlog = read_hostlog()
+            s["gamemode"] = gamepolicy_state(hostlog)
             if s != last:
                 say(" ".join(f"{k}={v}" for k, v in s.items()))
                 last = s
-            if a.verbose:
+            if gm:
                 for l in gm.new_lines():
                     say(f"gamepolicy: {l[:200]}")
-            seen_game |= s["game"] == "running"
+            seen_game |= s["game"] != "none"
             if s["windows"] and window_at is None:
                 window_at = time.monotonic()
             if a.close_after is not None and window_at and not closed \
                     and time.monotonic() - window_at >= a.close_after:
                 # Graceful close (WM_CLOSE), like the user closing the game window.
-                exe = next(e for e in GAME_EXES if any(e in p["cmd"] for p in wine_procs() if is_game(p)))
-                wine = DATA / "wine/bin/wine"
-                subprocess.Popen([str(wine), "taskkill", "/im", exe], env={**os.environ, "WINEPREFIX": a.prefix},
+                subprocess.Popen([wine_bin(a.runtime), "taskkill", "/im", s["game"]],
+                                 env={**os.environ, "WINEPREFIX": a.prefix},
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                say(f"closing game window ({exe})")
+                say(f"closing game window ({s['game']})")
                 closed = True
             if a.until == "window" and s["windows"]:
                 reason = "window"; break
             if a.autoplay:
-                hostlog = GAMEHOST_LOG.read_text(errors="replace")
-                if "autoplay: turn phase" in hostlog and not turning:
+                phase = gpu.phase = autoplay_phase(hostlog)
+                if phase == "turn" and not turning:
                     # Turn the camera from inside Wine, like a real mouse.
                     turner = DATA / "sidecar/gamehost/turner.exe"
-                    subprocess.Popen([str(DATA / a.runtime / "bin/wine"), str(turner), str(a.turn), "20", "8"],
+                    subprocess.Popen([wine_bin(a.runtime), str(turner), str(a.turn)],
                                      env={**os.environ, "WINEPREFIX": a.prefix, "WINEDEBUG": "-all"},
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     say("turning camera (turner.exe)")
                     turning = True
-                if "autoplay: done" in hostlog:
+                if phase == "done":
                     reason = "autoplay done"; break
             if a.until == "gamemode" and s["gamemode"] == "on":
                 reason = "gamemode"; break
@@ -404,26 +429,18 @@ def cmd_watch(a):
     except KeyboardInterrupt:
         reason = "interrupted"
     finally:
-        if a.shot:
-            procs = [p for p in wine_procs() if p["prefix"] == a.prefix and is_game(p)]
-            ids = [re.search(r"id=(\d+)", l).group(1) for l in window_probe([p["pid"] for p in procs])
-                   if l.startswith("window") and "layer=0" in l]
-            if ids:
-                shot = CACHE / f"shot-{int(time.time())}.jpg"
-                run(["screencapture", "-x", "-o", "-t", "jpg", "-l", ids[0], str(shot)])
-                run(["sips", "-Z", "480", str(shot)])
-                say(f"screenshot {shot}" if shot.exists() else "screenshot failed (Screen Recording permission?)")
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
-        gm.stop()
+        if gm:
+            gm.stop()
         say(f"stop: {reason}; cleaning up")
-        if a.until == "exit" and reason == "game exited":
+        if reason == "game exited":
             # Measure what Yaagl leaves behind on its own before we clean up.
             deadline = time.monotonic() + a.grace
-            while time.monotonic() < deadline and (yaagl_pids() or any(p["prefix"] == a.prefix for p in wine_procs())):
+            while time.monotonic() < deadline and (yaagl_pids() or prefix_procs(a.prefix)):
                 time.sleep(1)
-            left = [p for p in wine_procs() if p["prefix"] == a.prefix]
+            left = prefix_procs(a.prefix)
             say(f"after game exit (+{a.grace:.0f}s max): wine_left={len(left)} yaagl_running={bool(yaagl_pids())} "
-                + ", ".join(re.split(r"[\\\\/]", p["cmd"].split(".exe")[0])[-1] for p in left))
+                + ", ".join(exe_name(p) for p in left))
         remaining = kill_prefix(a.prefix)
         if a.launch or yaagl_pids():
             deadline = time.monotonic() + 60
@@ -433,7 +450,7 @@ def cmd_watch(a):
                 say("Yaagl still running after 60s (patch revert pending?) — left open")
             else:
                 say("Yaagl exited")
-        for l in GAMEHOST_LOG.read_text(errors="replace").splitlines():
+        for l in read_hostlog().splitlines():
             if l.startswith(("frames:", "shot:", "autoplay:", "dev:")):
                 say(l)
         if gpu:
@@ -442,7 +459,8 @@ def cmd_watch(a):
         if restore_grades:
             set_grades(restore_grades)
             say(f"graphics grades restored {restore_grades}")
-        say(f"SUMMARY reason={reason} last={last} wine_left={remaining} gamemode_log={log_path}")
+        say(f"SUMMARY reason={reason} last={last} wine_left={remaining}"
+            + (f" gamemode_log={log_path}" if gm else ""))
 
 
 def main():
@@ -456,19 +474,18 @@ def main():
     sub.add_parser("window").set_defaults(fn=cmd_window)
     w = sub.add_parser("watch")
     w.add_argument("--prefix", default=PREFIX)
-    w.add_argument("--launch", action="store_true")
-    w.add_argument("--timeout", type=float, default=60)
-    w.add_argument("--until", choices=["window", "fullscreen", "gamemode", "exit"])
-    w.add_argument("--grace", type=float, default=10)
+    w.add_argument("--launch", action="store_true", help="start Yaagl with YAAGL_AUTOLAUNCH=1 (no clicks)")
+    w.add_argument("--timeout", type=float, default=60, help="stop after N seconds")
+    w.add_argument("--until", choices=["window", "fullscreen", "gamemode", "exit"], help="stop when reached")
+    w.add_argument("--grace", type=float, default=10, help="with --until exit: wait for Wine/Yaagl to exit")
     w.add_argument("--close-after", type=float, help="gracefully close the game N seconds after its window appears")
-    w.add_argument("--shot", action="store_true", help="save one small screenshot of the game window before cleanup")
     w.add_argument("--autoplay", action="store_true",
                    help="enter the game, measure frame times idle and while turning the camera, save screenshots")
     w.add_argument("--runtime", default="wine", help="Wine runtime directory under the data dir (e.g. wine-gptk4)")
     w.add_argument("--env", action="append", help="extra KEY=VALUE environment for Yaagl and the game")
     w.add_argument("--grade", action="append", help="Genshin custom graphics grade KEY=VALUE for this run (9=1: volumetric fog off)")
     w.add_argument("--turn", type=float, default=12, help="camera-turn phase length (s) with --autoplay")
-    w.add_argument("--verbose", action="store_true", help="print gamepolicyd log lines")
+    w.add_argument("--verbose", action="store_true", help="stream and print gamepolicyd log lines")
     w.set_defaults(fn=cmd_watch)
     a = ap.parse_args()
     a.fn(a)
