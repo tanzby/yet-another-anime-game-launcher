@@ -7,8 +7,10 @@ import {
   arrayFind,
   getCPUInfo,
   build,
+  env,
   generateRandomString,
-  stats,
+  fileOrDirExists,
+  wait,
   resolve,
   writeFile,
 } from "@utils";
@@ -19,7 +21,12 @@ export async function createWine(options: {
   prefix: string;
   distro: WineDistribution;
 }) {
-  const loaderBin = await getCorrectWineBinary();
+  // Dev/diagnostics: YAAGL_WINE_RUNTIME selects another runtime directory
+  // (e.g. ./wine-gptk4) in place of ./wine.
+  const runtimePath = resolve(
+    (await env("YAAGL_WINE_RUNTIME").catch(() => "")) || "./wine"
+  );
+  const loaderBin = await getCorrectWineBinary(runtimePath);
 
   async function cmd(command: string, args: string[]) {
     return await exec("cmd", [command, ...args]);
@@ -63,10 +70,47 @@ export async function createWine(options: {
     );
   }
 
-  async function waitUntilServerOff() {
-    return await unixExec2([join(dirname(loaderBin), "wineserver"), "-w"], {
+  function wineserver(arg: "-w" | "-k") {
+    return unixExec2([join(dirname(loaderBin), "wineserver"), arg], {
       ...getEnvironmentVariables(),
     });
+  }
+
+  async function waitUntilServerOff() {
+    return await wineserver("-w");
+  }
+
+  /**
+   * Stop everything running in this prefix: ask wineserver to kill its
+   * processes, then kill leftovers it no longer tracks (e.g. a winedevice.exe
+   * orphaned after wineserver died).
+   */
+  async function shutdown() {
+    await wineserver("-k").catch(() => undefined); // no server running
+    // Every process of a prefix maps files from its server directory,
+    // /tmp/.wine-<uid>/server-<dev>-<inode of the prefix>; orphans whose
+    // server died are caught by their working directory inside the prefix.
+    // (build() escapes newlines, so the script is a single line.)
+    const script = [
+      `dir="/tmp/.wine-$(id -u)/server-$(printf %x $(stat -f %d "$1"))-$(printf %x $(stat -f %i "$1"))"`,
+      `pids=$(ps -axo pid=,command= | awk '$2 ~ /^[CZ]:\\\\/ {print $1}' | paste -sd, -)`,
+      `{ lsof -t +d "$dir" 2>/dev/null; [ -z "$pids" ] || lsof -a -d cwd -Fpn -p "$pids" 2>/dev/null | awk -v pre="$1/" '/^p/ {p = substr($0, 2)} /^n/ && index(substr($0, 2), pre) == 1 {print p}'`,
+      `} | sort -u | xargs kill -9 2>/dev/null`,
+      `true`,
+    ].join("; ");
+    await unixExec(["sh", "-c", script, "sh", options.prefix]);
+  }
+
+  /** Wait for the prefix to shut down; force it after timeoutMs. */
+  async function waitUntilServerOffOrShutdown(timeoutMs: number) {
+    const done = await Promise.race([
+      waitUntilServerOff().then(() => true),
+      wait(timeoutMs).then(() => false),
+    ]);
+    if (!done) {
+      await log(`Wine did not exit within ${timeoutMs}ms, shutting it down`);
+      await shutdown();
+    }
   }
 
   function toWinePath(absPath: string) {
@@ -157,9 +201,12 @@ reg add "HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation\\Global\\NGXCore" /v F
     exec,
     exec2,
     waitUntilServerOff,
+    waitUntilServerOffOrShutdown,
+    shutdown,
     cmd,
     toWinePath,
     prefix: options.prefix,
+    runtimePath,
     openCmdWindow,
     setProps,
     setNVExtension,
@@ -169,15 +216,13 @@ reg add "HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation\\Global\\NGXCore" /v F
   };
 }
 
-export async function getCorrectWineBinary() {
-  try {
-    // use wine64 if it is presented
-    // in newer version of wine (esp. WoW64 mode), only one binary `bin/wine` exists
-    await stats("./wine/bin/wine64");
-    return resolve("./wine/bin/wine64");
-  } catch {
-    return resolve("./wine/bin/wine");
-  }
+export async function getCorrectWineBinary(runtimePath = "./wine") {
+  // use wine64 if it is presented
+  // in newer version of wine (esp. WoW64 mode), only one binary `bin/wine` exists
+  const wine64 = resolve(join(runtimePath, "bin", "wine64"));
+  return (await fileOrDirExists(wine64))
+    ? wine64
+    : resolve(join(runtimePath, "bin", "wine"));
 }
 
 export type Wine = ReturnType<typeof createWine> extends Promise<infer T>

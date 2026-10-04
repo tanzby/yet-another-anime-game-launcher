@@ -12,7 +12,7 @@ import {
   writeBinary,
   getKeyOrDefault,
 } from "../../../utils";
-import { Wine } from "../../../wine";
+import { Wine, prepareGameHost } from "../../../wine";
 import { Config } from "@config";
 import { putLocal, patchProgram, patchRevertProgram } from "../patch";
 import { CN_BLOCK_URL, OS_BLOCK_URL } from "../../secret";
@@ -103,6 +103,9 @@ export async function* launchGameProgram({
   yield ["setUndeterminedProgress"];
   yield ["setStateText", "PATCHING"];
 
+  // Leftovers from an earlier session (e.g. orphaned driver hosts) would
+  // otherwise keep running alongside the new one.
+  await wine.shutdown();
   await wine.setProps(config);
   if (config.hk4eEnableHDR) {
     await applyHDRRegistry({ wine, server });
@@ -163,6 +166,16 @@ cd /d "${wine.toWinePath(gameDir)}"
       );
     }
 
+    // Run the game from a game .app in a native full-screen Space so that
+    // macOS can turn on Game Mode.
+    const gamehostEnv = config.gameMode
+      ? await prepareGameHost(
+          wine.runtimePath,
+          server.id == "hk4e_cn" ? "原神" : "Genshin Impact",
+          gameExecutable
+        )
+      : {};
+
     await wine.exec2(
       config.steamPatch ? "C:\\windows\\system32\\steam.exe" : "cmd",
       config.steamPatch
@@ -172,6 +185,7 @@ cd /d "${wine.toWinePath(gameDir)}"
         MTL_HUD_ENABLED: config.metalHud ? "1" : "",
         WINEDLLOVERRIDES: "",
         WINE_ENABLE_TIMEOUT_FIX: config.timeoutFix ? "1" : "0",
+        ...gamehostEnv,
         ...(wine.attributes.renderBackend == "dxmt"
           ? {
               WINEESYNC: "1",
@@ -192,7 +206,9 @@ cd /d "${wine.toWinePath(gameDir)}"
       },
       logfile
     );
-    await wine.waitUntilServerOff();
+    // The game has exited: let Wine wind down, but don't hang on stuck
+    // processes (they would keep Yaagl in the running state forever).
+    await wine.waitUntilServerOffOrShutdown(15000);
     if (config.hk4eEnableHDR) {
       await revertHDRRegistry({ wine, server });
     }
@@ -202,6 +218,8 @@ cd /d "${wine.toWinePath(gameDir)}"
   } catch (e: unknown) {
     // it seems game crashed?
     await log(String(e));
+    // Wine may still be running (or stuck) after a failed launch or crash.
+    await wine.waitUntilServerOffOrShutdown(15000);
   }
 
   // await removeFile(resolve("bWh5cHJvdDJfcnVubmluZy5yZWcK.reg"));

@@ -114,6 +114,7 @@ export const de_DE: typeof zh_CN = {
 
   SETTING_BLOCK_NET: "Launch Fix(block hosts)",
   SETTING_TIMEOUT_FIX: "Timeout Fix",
+  SETTING_GAME_MODE: "Nativer Vollbildmodus + Spielmodus",
   SETTING_LICENSES: en.SETTING_LICENSES, // TODO: Translate
   SETTING_ENABLE_HDR: "HDR aktivieren",
 

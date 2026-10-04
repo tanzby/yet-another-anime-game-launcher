@@ -112,6 +112,7 @@ export const ko_KR: typeof zh_CN = {
 
   SETTING_BLOCK_NET: "게임실행 문제해결(hosts 수정)",
   SETTING_TIMEOUT_FIX: "타임아웃 문제 해결",
+  SETTING_GAME_MODE: "네이티브 전체 화면 + 게임 모드",
   SETTING_LICENSES: en.SETTING_LICENSES, // TODO: Translate
   SETTING_ENABLE_HDR: "HDR 활성화",
 

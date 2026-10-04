@@ -1,4 +1,4 @@
-import { openDir, fatal, open } from "@utils";
+import { openDir, fatal, open, env, log, shutdown, exit } from "@utils";
 import {
   Box,
   Button,
@@ -84,6 +84,12 @@ export async function createLauncher({
     onCheckUpdate,
   });
 
+  // Dev/diagnostics hook: `open --env YAAGL_AUTOLAUNCH=1 Yaagl.app` starts the
+  // game without a click and quits Yaagl once the game has exited.
+  const autoLaunch = await env("YAAGL_AUTOLAUNCH")
+    .then(value => value === "1")
+    .catch(() => false);
+
   const { selectPath } = await createGameInstallationDirectorySanitizer({
     openFolderDialog: async () =>
       await openDir(locale.get("SELECT_INSTALLATION_DIR")),
@@ -100,6 +106,17 @@ export async function createLauncher({
       { locale }
     );
     taskQueue.next(() => init(config));
+    if (autoLaunch) {
+      taskQueue.next(async function* () {
+        if (installState() != "INSTALLED" || updateRequired()) {
+          await log("YAAGL_AUTOLAUNCH: game not ready, skipped");
+          return;
+        }
+        yield* launch(config);
+        await shutdown();
+        await exit(0);
+      });
+    }
 
     const [
       nonUrgentStatusText,

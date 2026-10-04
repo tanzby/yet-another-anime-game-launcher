@@ -160,7 +160,11 @@ export async function* patchRevertProgram(
   if (wine.attributes.renderBackend == "dxmt") {
     for (const f of DXMT_FILES) {
       const wineLibPath = resolve(`./wine/lib/wine/x86_64-windows/${f}`);
-      await forceMove(wineLibPath + ".bak", wineLibPath);
+      // A missing backup means the file was never replaced; don't fail the
+      // whole revert (which would fall back to a full integrity check).
+      if (await fileOrDirExists(wineLibPath + ".bak")) {
+        await forceMove(wineLibPath + ".bak", wineLibPath);
+      }
     }
   }
   if (config.reshade) {

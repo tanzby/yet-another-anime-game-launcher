@@ -45,6 +45,7 @@ import createSteamPatch from "./config/steam-patch";
 import createBlockNet from "./config/block-net";
 import createResolution from "./config/resolution";
 import createTimeoutFix from "./config/timeout-fix";
+import createGameMode from "./config/game-mode";
 import { createEnableHDRConfig } from "./config/enable-hdr";
 import { getGameVersion } from "../unity";
 import {
@@ -308,6 +309,7 @@ export async function createHK4EChannelClient({
       const [HDR] = await createEnableHDRConfig({ locale, config });
       const [RES] = await createResolution({ locale, config });
       const [TF] = await createTimeoutFix({ locale, config });
+      const [GM] = await createGameMode({ locale, config });
 
       return function () {
         return [
@@ -320,6 +322,7 @@ export async function createHK4EChannelClient({
           <BN />,
           <RES />,
           <TF />,
+          <GM />,
         ];
       };
     },

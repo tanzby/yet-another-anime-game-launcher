@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+"""Text diagnostics for Yaagl's Wine game runs: processes, windows, Game
+Mode, and (watch --autoplay) frame times. `watch` always cleans up the prefix
+and waits for Yaagl to revert its game patches and quit. See
+docs/genshin-macos.md."""
+
+import argparse
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+
+DATA = Path.home() / "Library/Application Support/Yaagl"
+PREFIX = str(DATA / "wineprefix")
+APP = "/Applications/Yaagl.app"
+GAME_EXES = ("YuanShen.exe", "GenshinImpact.exe")
+CACHE = Path.home() / "Library/Caches/yaagl-diag"
+SWIFT_SRC = Path(__file__).resolve().parent / "window-info.swift"
+GAMEHOST_LOG = DATA / "logs/gamehost.log"
+GAMEMODE_PROCS = ("GamePolicyAgent", "gamepolicyd")
+
+T0 = time.monotonic()
+
+
+def say(msg):
+    print(f"[{time.monotonic() - T0:6.1f}s] {msg}", flush=True)
+
+
+def run(args, **kw):
+    return subprocess.run(args, capture_output=True, text=True, **kw)
+
+
+def server_dir_name(prefix):
+    st = os.stat(prefix)
+    return f"server-{st.st_dev:x}-{st.st_ino:x}"
+
+
+def cwd_prefixes(pids):
+    """Wine overwrites its env block, so derive WINEPREFIX from each cwd:
+    Windows processes sit in <prefix>/drive_c/..., wineserver in
+    /tmp/.wine-UID/server-<dev>-<inode of prefix>."""
+    if not pids:
+        return {}
+    out = run(["lsof", "-a", "-d", "cwd", "-Fpn", "-p", ",".join(map(str, pids))]).stdout
+    cwds, pid = {}, None
+    for line in out.splitlines():
+        if line[:1] == "p":
+            pid = int(line[1:])
+        elif line[:1] == "n" and pid is not None:
+            cwds[pid] = line[1:]
+    servers = {}
+    for cand in {PREFIX, *(c.split("/drive_c")[0] for c in cwds.values() if "/drive_c" in c)}:
+        try:
+            servers[server_dir_name(cand)] = cand
+        except OSError:
+            pass
+    result = {}
+    for pid, cwd in cwds.items():
+        if "/drive_c" in cwd:
+            result[pid] = cwd.split("/drive_c")[0]
+        else:
+            result[pid] = servers.get(os.path.basename(cwd), "?")
+    return result
+
+
+def wine_procs():
+    """Return [{pid, ppid, start, cpu, cmd, prefix}] for Wine-related processes."""
+    out = run(["ps", "-axww", "-o", "pid=,ppid=,%cpu=,lstart=,command="]).stdout
+    wine_bins = {
+        int(pid)
+        for pid, comm in (l.strip().split(" ", 1) for l in run(["ps", "-axo", "pid=,comm="]).stdout.splitlines())
+        if os.path.basename(comm) in ("wineserver", "wine", "wine64", "wine-preloader")
+    }
+    procs = []
+    for line in out.splitlines():
+        m = re.match(r"\s*(\d+)\s+(\d+)\s+([\d.]+)\s+(\w+ \w+ +\d+ [\d:]+ \d+)\s+(.*)", line)
+        if not m:
+            continue
+        pid, ppid, cpu, start, cmd = m.groups()
+        if not (cmd.startswith(("C:\\", "Z:\\")) or int(pid) in wine_bins):
+            continue
+        procs.append(dict(pid=int(pid), ppid=int(ppid), cpu=float(cpu), start=start, cmd=cmd.strip()))
+    prefixes = cwd_prefixes([p["pid"] for p in procs])
+    for p in procs:
+        p["prefix"] = prefixes.get(p["pid"], "?")
+    # Windows processes whose cwd is outside drive_c (e.g. the game in its
+    # install dir) belong to the default prefix while its wineserver runs.
+    default_live = any(p["prefix"] == PREFIX and "/wineserver" in p["cmd"] for p in procs)
+    for p in procs:
+        if p["prefix"] == "?" and default_live and p["cmd"].startswith(("C:\\", "Z:\\")):
+            p["prefix"] = PREFIX
+    return procs
+
+
+
+
+def is_server(p):
+    return "/wineserver" in p["cmd"]
+
+
+def exe_name(p):
+    return "wineserver" if is_server(p) else re.split(r"[\\\\/]", p["cmd"].split(".exe")[0])[-1] + ".exe"
+
+
+def is_game(p):
+    return exe_name(p) in GAME_EXES
+
+
+def prefix_procs(prefix):
+    return [p for p in wine_procs() if p["prefix"] == prefix]
+
+
+def live_servers(procs):
+    """Prefixes whose wineserver is running."""
+    return {p["prefix"] for p in procs if is_server(p)}
+
+
+def wine_bin(runtime="wine"):
+    return str(DATA / runtime / "bin/wine")
+
+
+def read_hostlog():
+    try:
+        return GAMEHOST_LOG.read_text(errors="replace")
+    except OSError:
+        return ""
+
+
+def cmd_ps(_):
+    procs = wine_procs()
+    if not procs:
+        print("no wine processes")
+        return
+    servers = live_servers(procs)
+    for prefix in sorted({p["prefix"] for p in procs}):
+        print(f"prefix {prefix}  wineserver={'yes' if prefix in servers else 'NO'}")
+        for p in procs:
+            if p["prefix"] != prefix:
+                continue
+            tag = " ORPHAN" if p["ppid"] == 1 and prefix not in servers else ""
+            tag += " GAME" if is_game(p) else ""
+            print(f"  {p['pid']:>6} ppid={p['ppid']:<6} cpu={p['cpu']:<5} since {p['start']}  {p['cmd'][:70]}{tag}")
+
+
+def wineserver_bin(prefix):
+    for p in prefix_procs(prefix):
+        if is_server(p):
+            m = re.match(r"(.*?/wineserver)(\s|$)", p["cmd"])
+            if m:
+                return m.group(1)
+    for runtime in ("wine", "wine-gptk4"):
+        cand = DATA / runtime / "bin/wineserver"
+        if cand.exists():
+            return str(cand)
+    return None
+
+
+def kill_prefix(prefix, quiet=False):
+    server = wineserver_bin(prefix)
+    if server:
+        run([server, "-k"], env={**os.environ, "WINEPREFIX": prefix}, timeout=10)
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and prefix_procs(prefix):
+        time.sleep(0.5)
+    left = prefix_procs(prefix)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for p in left:
+            try:
+                os.kill(p["pid"], sig)
+            except ProcessLookupError:
+                pass
+        time.sleep(1)
+        left = prefix_procs(prefix)
+        if not left:
+            break
+    if not quiet:
+        say(f"kill {prefix}: remaining={len(left)}")
+    return len(left)
+
+
+def cmd_kill(a):
+    if a.orphans:
+        procs = wine_procs()
+        servers = live_servers(procs)
+        prefixes = {p["prefix"] for p in procs if p["ppid"] == 1 and p["prefix"] not in servers}
+        if not prefixes:
+            print("no orphans")
+        for prefix in sorted(prefixes):
+            kill_prefix(prefix)
+    else:
+        kill_prefix(a.prefix)
+
+
+def window_probe(pids):
+    exe = CACHE / "window-info"
+    if not exe.exists() or exe.stat().st_mtime < SWIFT_SRC.stat().st_mtime:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        r = run(["swiftc", "-O", "-o", str(exe), str(SWIFT_SRC)])
+        if r.returncode:
+            sys.exit(f"swiftc failed: {r.stderr}")
+    return run([str(exe), *map(str, pids)]).stdout.splitlines()
+
+
+def snapshot(prefix):
+    procs = prefix_procs(prefix)
+    lines = window_probe([p["pid"] for p in procs])
+    screens = [tuple(map(int, re.findall(r"[wh]=(\d+)", l))) for l in lines if l.startswith("screen")]
+    wins = [l for l in lines if l.startswith("window")]
+    covers = False
+    for w in wins:
+        m = dict(re.findall(r"(\w+)=(\S+)", w))
+        try:
+            covers |= (int(float(m["w"])), int(float(m["h"]))) in screens
+        except (KeyError, ValueError):
+            pass
+    game = [p for p in procs if is_game(p)]
+    net = 0
+    if game:
+        out = run(["lsof", "-nP", "-a", "-iTCP", "-sTCP:ESTABLISHED", "-p", str(game[0]["pid"])]).stdout
+        net = max(0, len(out.splitlines()) - 1)
+    front = next((l[6:] for l in lines if l.startswith("front ")), "-")
+    front_is_wine = any(f"pid={p['pid']} " in front + " " for p in procs)
+    space = ",".join(re.search(r"type=(\S+)", l).group(1) for l in lines if l.startswith("space"))
+    return {
+        "procs": len(procs),
+        "names": "+".join(sorted({exe_name(p) for p in procs})),
+        "game": exe_name(game[0]) if game else "none",
+        "game_tcp": net,
+        "windows": len(wins),
+        "covers_screen": covers,
+        "front": "wine" if front_is_wine else front,
+        "space_type": space,  # 4 == native full-screen Space
+        "fullscreen_space": "4" in space.split(",") and front_is_wine,
+    }
+
+
+class GameModeLog:
+    def __init__(self, path):
+        self.path = path
+        pred = " OR ".join(f'process == "{p}"' for p in GAMEMODE_PROCS)
+        self.f = open(path, "w")
+        self.p = subprocess.Popen(
+            ["log", "stream", "--style", "compact", "--level", "debug", "--predicate", pred],
+            stdout=self.f, stderr=subprocess.DEVNULL,
+        )
+        self.seen = 0
+
+    def new_lines(self):
+        lines = Path(self.path).read_text(errors="replace").splitlines()
+        fresh, self.seen = lines[self.seen:], len(lines)
+        noise = ("Filtering", "Timestamp")
+        return [l for l in fresh if not l.startswith(noise)
+                and "runningboard" not in l.lower() and "launchservices" not in l.lower()]
+
+    def stop(self):
+        self.p.terminate()
+        self.f.close()
+
+
+GENERAL_DATA = '"GENERAL_DATA_h2389025596"=hex:'
+
+
+def set_grades(changes):
+    """Set Genshin custom graphics grades (e.g. {9: 1} = volumetric fog off)
+    in the prefix's user.reg while Wine is stopped. Returns the previous
+    values for restoring."""
+    reg = Path(PREFIX) / "user.reg"
+    text = reg.read_text(encoding="utf-8", errors="surrogateescape")
+    i = text.index(GENERAL_DATA) + len(GENERAL_DATA)
+    j = i
+    while True:  # value continues over "\\\n" line breaks
+        k = text.index("\n", j)
+        if text[k - 1] != "\\":
+            break
+        j = k + 1
+    raw = bytes(int(x, 16) for x in re.sub(r"[\\\s]", "", text[i:k]).split(",") if x)
+    data = json.loads(raw.rstrip(b"\0").decode())
+    gfx = json.loads(data["graphicsData"])
+    before = {}
+    for g in gfx["customVolatileGrades"]:
+        if g["key"] in changes:
+            before[g["key"]] = g["value"]
+            g["value"] = changes[g["key"]]
+    gfx["currentVolatielGrade"] = -1
+    data["graphicsData"] = json.dumps(gfx, separators=(",", ":"))
+    new = json.dumps(data, separators=(",", ":"), ensure_ascii=False).encode() + b"\0"
+    reg.write_text(text[:i] + ",".join(f"{b:02x}" for b in new) + text[k:], encoding="utf-8",
+                   errors="surrogateescape")
+    return before
+
+
+def gamepolicy_state(text):
+    """gamepolicyd's own verdict for the game process, logged by the injected
+    gamehost dylib: Game Mode applies when the process is an identified game
+    and in game full screen. Returns on/off/unknown."""
+    vals = dict(re.findall(r"gamepolicy: \w+ (\w+)=(\d)", text))
+    if not vals:
+        return "unknown"
+    return "on" if vals.get("isIdentifiedGame") == "1" and vals.get("isGameFullscreen") == "1" else "off"
+
+
+def gpu_utilization():
+    out = run(["ioreg", "-r", "-d", "1", "-c", "IOAccelerator"]).stdout
+    m = re.search(r'"Device Utilization %"=(\d+)', out)
+    return int(m.group(1)) if m else None
+
+
+def autoplay_phase(text):
+    return ("done" if "autoplay: done" in text else "turn" if "turn phase" in text
+            else "idle" if "idle phase" in text else None)
+
+
+class GpuSampler(threading.Thread):
+    """Samples GPU utilisation every 0.5s into the current autoplay phase
+    (set by the watch loop)."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.samples, self.stop_flag, self.phase = {}, False, None
+
+    def run(self):
+        while not self.stop_flag:
+            util = gpu_utilization()
+            if self.phase in ("idle", "turn") and util is not None:
+                self.samples.setdefault(self.phase, []).append(util)
+            time.sleep(0.5)
+
+    def report(self):
+        for phase, v in self.samples.items():
+            say(f"gpu: phase={phase} utilization mean={sum(v) / len(v):.0f}% max={max(v)}% samples={len(v)}")
+
+
+def yaagl_pids():
+    return [int(x) for x in run(["pgrep", "-f", f"{APP}/Contents/MacOS/"]).stdout.split()]
+
+
+def cmd_window(_):
+    procs = wine_procs()
+    print("\n".join(window_probe([p["pid"] for p in procs])))
+
+
+def cmd_watch(a):
+    log_path = CACHE / f"gamemode-{int(time.time())}.log"
+    CACHE.mkdir(parents=True, exist_ok=True)
+    if a.launch:
+        if yaagl_pids():
+            sys.exit("Yaagl is already running; quit it first (autolaunch only applies at startup).")
+        kill_prefix(a.prefix, quiet=True)
+    restore_grades = None
+    if a.grade:
+        changes = {int(k): int(v) for k, v in (g.split("=") for g in a.grade)}
+        restore_grades = set_grades(changes)
+        say(f"graphics grades set {changes} (was {restore_grades})")
+    gm = GameModeLog(log_path) if a.verbose else None
+    if a.launch:
+        envs = ["YAAGL_AUTOLAUNCH=1"]
+        envs += a.env or []
+        if a.runtime != "wine":
+            envs.append(f"YAAGL_WINE_RUNTIME={DATA / a.runtime}")
+        if a.autoplay:
+            # Dev-only pieces are not shipped in the app; build them into the
+            # data dir's sidecar (left alone by Yaagl's resource sync).
+            build = Path(__file__).resolve().parents[2] / "native/gamehost/build.sh"
+            r = run(["sh", str(build), "--dev", str(DATA / "sidecar/gamehost")])
+            if r.returncode:
+                sys.exit(f"building dev helpers failed: {r.stderr}")
+            if not (DATA / "sidecar/gamehost/turner.exe").exists():
+                say("turner.exe missing (set LLVM_MINGW): the camera will not turn")
+            shots = CACHE / "shots"
+            shots.mkdir(parents=True, exist_ok=True)
+            envs += ["YAAGL_GAMEHOST_DEV=autoplay", f"YAAGL_GAMEHOST_SHOT_DIR={shots}",
+                     f"YAAGL_GAMEHOST_TURN={a.turn}"]
+        run(["open", *[x for e in envs for x in ("--env", e)], APP])
+        say("launched Yaagl with YAAGL_AUTOLAUNCH=1")
+    last, seen_game, reason, window_at, closed, turning = None, False, "timeout", None, False, False
+    GAMEHOST_LOG.parent.mkdir(parents=True, exist_ok=True)
+    GAMEHOST_LOG.write_text("")
+    gpu = GpuSampler() if a.autoplay else None
+    if gpu:
+        gpu.start()
+    try:
+        while time.monotonic() - T0 < a.timeout:
+            s = snapshot(a.prefix)
+            hostlog = read_hostlog()
+            s["gamemode"] = gamepolicy_state(hostlog)
+            if s != last:
+                say(" ".join(f"{k}={v}" for k, v in s.items()))
+                last = s
+            if gm:
+                for l in gm.new_lines():
+                    say(f"gamepolicy: {l[:200]}")
+            seen_game |= s["game"] != "none"
+            if s["windows"] and window_at is None:
+                window_at = time.monotonic()
+            if a.close_after is not None and window_at and not closed \
+                    and time.monotonic() - window_at >= a.close_after:
+                # Graceful close (WM_CLOSE), like the user closing the game window.
+                subprocess.Popen([wine_bin(a.runtime), "taskkill", "/im", s["game"]],
+                                 env={**os.environ, "WINEPREFIX": a.prefix},
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                say(f"closing game window ({s['game']})")
+                closed = True
+            if a.until == "window" and s["windows"]:
+                reason = "window"; break
+            if a.autoplay:
+                phase = gpu.phase = autoplay_phase(hostlog)
+                if phase == "turn" and not turning:
+                    # Turn the camera from inside Wine, like a real mouse.
+                    turner = DATA / "sidecar/gamehost/turner.exe"
+                    subprocess.Popen([wine_bin(a.runtime), str(turner), str(a.turn)],
+                                     env={**os.environ, "WINEPREFIX": a.prefix, "WINEDEBUG": "-all"},
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    say("turning camera (turner.exe)")
+                    turning = True
+                if phase == "done":
+                    reason = "autoplay done"; break
+            if a.until == "gamemode" and s["gamemode"] == "on":
+                reason = "gamemode"; break
+            if a.until == "fullscreen" and s["fullscreen_space"]:
+                reason = "fullscreen"; break
+            if a.until == "exit" and seen_game and s["game"] == "none":
+                reason = "game exited"; break
+            time.sleep(2)
+    except KeyboardInterrupt:
+        reason = "interrupted"
+    finally:
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+        if gm:
+            gm.stop()
+        say(f"stop: {reason}; cleaning up")
+        if reason == "game exited":
+            # Measure what Yaagl leaves behind on its own before we clean up.
+            deadline = time.monotonic() + a.grace
+            while time.monotonic() < deadline and (yaagl_pids() or prefix_procs(a.prefix)):
+                time.sleep(1)
+            left = prefix_procs(a.prefix)
+            say(f"after game exit (+{a.grace:.0f}s max): wine_left={len(left)} yaagl_running={bool(yaagl_pids())} "
+                + ", ".join(exe_name(p) for p in left))
+        remaining = kill_prefix(a.prefix)
+        if a.launch or yaagl_pids():
+            deadline = time.monotonic() + 60
+            while yaagl_pids() and time.monotonic() < deadline:
+                time.sleep(1)  # Yaagl reverts game patches, then exits.
+            if yaagl_pids():
+                say("Yaagl still running after 60s (patch revert pending?) — left open")
+            else:
+                say("Yaagl exited")
+        for l in read_hostlog().splitlines():
+            if l.startswith(("frames:", "shot:", "autoplay:", "dev:")):
+                say(l)
+        if gpu:
+            gpu.stop_flag = True
+            gpu.report()
+        if restore_grades:
+            set_grades(restore_grades)
+            say(f"graphics grades restored {restore_grades}")
+        say(f"SUMMARY reason={reason} last={last} wine_left={remaining}"
+            + (f" gamemode_log={log_path}" if gm else ""))
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("ps").set_defaults(fn=cmd_ps)
+    k = sub.add_parser("kill")
+    k.add_argument("--prefix", default=PREFIX)
+    k.add_argument("--orphans", action="store_true")
+    k.set_defaults(fn=cmd_kill)
+    sub.add_parser("window").set_defaults(fn=cmd_window)
+    w = sub.add_parser("watch")
+    w.add_argument("--prefix", default=PREFIX)
+    w.add_argument("--launch", action="store_true", help="start Yaagl with YAAGL_AUTOLAUNCH=1 (no clicks)")
+    w.add_argument("--timeout", type=float, default=60, help="stop after N seconds")
+    w.add_argument("--until", choices=["window", "fullscreen", "gamemode", "exit"], help="stop when reached")
+    w.add_argument("--grace", type=float, default=10, help="with --until exit: wait for Wine/Yaagl to exit")
+    w.add_argument("--close-after", type=float, help="gracefully close the game N seconds after its window appears")
+    w.add_argument("--autoplay", action="store_true",
+                   help="enter the game, measure frame times idle and while turning the camera, save screenshots")
+    w.add_argument("--runtime", default="wine", help="Wine runtime directory under the data dir (e.g. wine-gptk4)")
+    w.add_argument("--env", action="append", help="extra KEY=VALUE environment for Yaagl and the game")
+    w.add_argument("--grade", action="append", help="Genshin custom graphics grade KEY=VALUE for this run (9=1: volumetric fog off)")
+    w.add_argument("--turn", type=float, default=12, help="camera-turn phase length (s) with --autoplay")
+    w.add_argument("--verbose", action="store_true", help="stream and print gamepolicyd log lines")
+    w.set_defaults(fn=cmd_watch)
+    a = ap.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
