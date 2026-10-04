@@ -218,6 +218,8 @@ cd /d "${wine.toWinePath(gameDir)}"
   } catch (e: unknown) {
     // it seems game crashed?
     await log(String(e));
+    // Wine may still be running (or stuck) after a failed launch or crash.
+    await wine.waitUntilServerOffOrShutdown(15000);
   }
 
   // await removeFile(resolve("bWh5cHJvdDJfcnVubmluZy5yZWcK.reg"));
