@@ -17,6 +17,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -285,6 +286,38 @@ def gamepolicy_state():
     return "on" if vals.get("isIdentifiedGame") == "1" and vals.get("isGameFullscreen") == "1" else "off"
 
 
+def gpu_utilization():
+    out = run(["ioreg", "-r", "-d", "1", "-c", "IOAccelerator"]).stdout
+    m = re.search(r'"Device Utilization %"=(\d+)', out)
+    return int(m.group(1)) if m else None
+
+
+class GpuSampler(threading.Thread):
+    """Samples GPU utilisation every 0.5s, grouped by the autoplay phase
+    currently announced in the gamehost log."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.samples, self.stop_flag = {}, False
+
+    def run(self):
+        while not self.stop_flag:
+            try:
+                text = GAMEHOST_LOG.read_text(errors="replace")
+            except OSError:
+                text = ""
+            phase = ("done" if "autoplay: done" in text else "turn" if "turn phase" in text
+                     else "idle" if "idle phase" in text else None)
+            util = gpu_utilization()
+            if phase in ("idle", "turn") and util is not None:
+                self.samples.setdefault(phase, []).append(util)
+            time.sleep(0.5)
+
+    def report(self):
+        for phase, v in self.samples.items():
+            say(f"gpu: phase={phase} utilization mean={sum(v) / len(v):.0f}% max={max(v)}% samples={len(v)}")
+
+
 def yaagl_pids():
     return [int(x) for x in run(["pgrep", "-f", f"{APP}/Contents/MacOS/"]).stdout.split()]
 
@@ -322,6 +355,9 @@ def cmd_watch(a):
     last, seen_game, reason, window_at, closed, turning = None, False, "timeout", None, False, False
     GAMEHOST_LOG.parent.mkdir(parents=True, exist_ok=True)
     GAMEHOST_LOG.write_text("")
+    gpu = GpuSampler() if a.autoplay else None
+    if gpu:
+        gpu.start()
     try:
         while time.monotonic() - T0 < a.timeout:
             s = snapshot(a.prefix)
@@ -400,6 +436,9 @@ def cmd_watch(a):
         for l in GAMEHOST_LOG.read_text(errors="replace").splitlines():
             if l.startswith(("frames:", "shot:", "autoplay:", "dev:")):
                 say(l)
+        if gpu:
+            gpu.stop_flag = True
+            gpu.report()
         if restore_grades:
             set_grades(restore_grades)
             say(f"graphics grades restored {restore_grades}")
