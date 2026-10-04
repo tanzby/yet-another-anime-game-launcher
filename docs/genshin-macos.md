@@ -48,4 +48,15 @@ Measured on 2026-10-04 (M5 Pro, DXMT, native full screen, fast continuous turn):
 | Off (1512×949) | Idle | 59.8 | 17.2 ms | 36.2 ms | 0 |
 | Off (1512×949) | Turn | 59.8 | 19.1 ms | 25.1 ms | 0 |
 
+GPTK 4 Beta 2 (`--runtime wine-gptk4`; the runtime dir is selected through `YAAGL_WINE_RUNTIME`, dev only), same spot, Retina on:
+
+| Run | Phase | fps | p99 | Max | Hitches > 50 ms |
+| --- | --- | --- | --- | --- | --- |
+| First (cold D3DMetal cache) | Idle | 59.4 | 47.6 ms | 71.1 ms | 5 |
+| First (cold D3DMetal cache) | Turn | 51.8 | 100.9 ms | 143.3 ms | 24 |
+| Second (warm cache) | Idle | 57.9 | 51.3 ms | 142.6 ms | 7 |
+| Second (warm cache) | Turn | 59.4 | 28.3 ms | 135.7 ms | 2 |
+
+GPTK's turn stutter is mostly D3DMetal shader compilation. Its cache is `$TMPDIR/../C/d3dm`, and the second run through the same area is smooth. Idle hitches remain; DXMT has none. In the spawn-area screenshots, DXMT and GPTK show the same background haze: luma 160.6 vs 159.9, contrast 36.7 vs 35.0. Missing volumetric fog is not reproduced there. Scenes where the fog is prominent (forest, night, god rays) are not covered by the script. DXMT stays the default.
+
 `gamemode=on` means `gamepolicyd` reported both `isIdentifiedGame=1` and `isGameFullscreen=1` (logged in `logs/gamehost.log`). Game progress can be checked in `wineprefix/drive_c/users/crossover/AppData/LocalLow/miHoYo/原神/output_log.txt` (`Genshin Start Log:` lines).

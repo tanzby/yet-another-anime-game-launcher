@@ -170,7 +170,7 @@ cd /d "${wine.toWinePath(gameDir)}"
     // macOS can turn on Game Mode.
     const gamehostEnv = config.gameMode
       ? await prepareGameHost(
-          resolve("./wine"),
+          wine.runtimePath,
           server.id == "hk4e_cn" ? "\u539f\u795e" : "Genshin Impact",
           gameExecutable
         )

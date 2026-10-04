@@ -7,6 +7,7 @@ import {
   arrayFind,
   getCPUInfo,
   build,
+  env,
   generateRandomString,
   stats,
   resolve,
@@ -19,7 +20,12 @@ export async function createWine(options: {
   prefix: string;
   distro: WineDistribution;
 }) {
-  const loaderBin = await getCorrectWineBinary();
+  // Dev/diagnostics: YAAGL_WINE_RUNTIME selects another runtime directory
+  // (e.g. ./wine-gptk4) in place of ./wine.
+  const runtimePath = resolve(
+    (await env("YAAGL_WINE_RUNTIME").catch(() => "")) || "./wine"
+  );
+  const loaderBin = await getCorrectWineBinary(runtimePath);
 
   async function cmd(command: string, args: string[]) {
     return await exec("cmd", [command, ...args]);
@@ -201,6 +207,7 @@ reg add "HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation\\Global\\NGXCore" /v F
     cmd,
     toWinePath,
     prefix: options.prefix,
+    runtimePath,
     openCmdWindow,
     setProps,
     setNVExtension,
@@ -210,14 +217,14 @@ reg add "HKEY_LOCAL_MACHINE\\SOFTWARE\\NVIDIA Corporation\\Global\\NGXCore" /v F
   };
 }
 
-export async function getCorrectWineBinary() {
+export async function getCorrectWineBinary(runtimePath = "./wine") {
   try {
     // use wine64 if it is presented
     // in newer version of wine (esp. WoW64 mode), only one binary `bin/wine` exists
-    await stats("./wine/bin/wine64");
-    return resolve("./wine/bin/wine64");
+    await stats(join(runtimePath, "bin", "wine64"));
+    return resolve(join(runtimePath, "bin", "wine64"));
   } catch {
-    return resolve("./wine/bin/wine");
+    return resolve(join(runtimePath, "bin", "wine"));
   }
 }
 

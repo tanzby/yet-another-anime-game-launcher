@@ -271,6 +271,8 @@ def cmd_watch(a):
     gm = GameModeLog(log_path)
     if a.launch:
         envs = ["YAAGL_AUTOLAUNCH=1"]
+        if a.runtime != "wine":
+            envs.append(f"YAAGL_WINE_RUNTIME={DATA / a.runtime}")
         if a.autoplay:
             shots = CACHE / "shots"
             shots.mkdir(parents=True, exist_ok=True)
@@ -310,7 +312,7 @@ def cmd_watch(a):
                 if "autoplay: turn phase" in hostlog and not turning:
                     # Turn the camera from inside Wine, like a real mouse.
                     turner = DATA / "sidecar/gamehost/turner.exe"
-                    subprocess.Popen([str(DATA / "wine/bin/wine"), str(turner), str(a.turn), "20", "8"],
+                    subprocess.Popen([str(DATA / a.runtime / "bin/wine"), str(turner), str(a.turn), "20", "8"],
                                      env={**os.environ, "WINEPREFIX": a.prefix, "WINEDEBUG": "-all"},
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     say("turning camera (turner.exe)")
@@ -381,6 +383,7 @@ def main():
     w.add_argument("--shot", action="store_true", help="save one small screenshot of the game window before cleanup")
     w.add_argument("--autoplay", action="store_true",
                    help="enter the game, measure frame times idle and while turning the camera, save screenshots")
+    w.add_argument("--runtime", default="wine", help="Wine runtime directory under the data dir (e.g. wine-gptk4)")
     w.add_argument("--turn", type=float, default=12, help="camera-turn phase length (s) with --autoplay")
     w.add_argument("--verbose", action="store_true", help="print gamepolicyd log lines")
     w.set_defaults(fn=cmd_watch)
