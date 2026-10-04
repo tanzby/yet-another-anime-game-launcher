@@ -270,9 +270,15 @@ def cmd_watch(a):
         kill_prefix(a.prefix, quiet=True)
     gm = GameModeLog(log_path)
     if a.launch:
-        run(["open", "--env", "YAAGL_AUTOLAUNCH=1", APP])
+        envs = ["YAAGL_AUTOLAUNCH=1"]
+        if a.autoplay:
+            shots = CACHE / "shots"
+            shots.mkdir(parents=True, exist_ok=True)
+            envs += ["YAAGL_GAMEHOST_DEV=autoplay", f"YAAGL_GAMEHOST_SHOT_DIR={shots}",
+                     f"YAAGL_GAMEHOST_TURN={a.turn}"]
+        run(["open", *[x for e in envs for x in ("--env", e)], APP])
         say("launched Yaagl with YAAGL_AUTOLAUNCH=1")
-    last, seen_game, reason, window_at, closed = None, False, "timeout", None, False
+    last, seen_game, reason, window_at, closed, turning = None, False, "timeout", None, False, False
     GAMEHOST_LOG.parent.mkdir(parents=True, exist_ok=True)
     GAMEHOST_LOG.write_text("")
     try:
@@ -299,6 +305,18 @@ def cmd_watch(a):
                 closed = True
             if a.until == "window" and s["windows"]:
                 reason = "window"; break
+            if a.autoplay:
+                hostlog = GAMEHOST_LOG.read_text(errors="replace")
+                if "autoplay: turn phase" in hostlog and not turning:
+                    # Turn the camera from inside Wine, like a real mouse.
+                    turner = DATA / "sidecar/gamehost/turner.exe"
+                    subprocess.Popen([str(DATA / "wine/bin/wine"), str(turner), str(a.turn), "20", "8"],
+                                     env={**os.environ, "WINEPREFIX": a.prefix, "WINEDEBUG": "-all"},
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    say("turning camera (turner.exe)")
+                    turning = True
+                if "autoplay: done" in hostlog:
+                    reason = "autoplay done"; break
             if a.until == "gamemode" and s["gamemode"] == "on":
                 reason = "gamemode"; break
             if a.until == "fullscreen" and s["fullscreen_space"]:
@@ -338,6 +356,9 @@ def cmd_watch(a):
                 say("Yaagl still running after 60s (patch revert pending?) — left open")
             else:
                 say("Yaagl exited")
+        for l in GAMEHOST_LOG.read_text(errors="replace").splitlines():
+            if l.startswith(("frames:", "shot:", "autoplay:", "dev:")):
+                say(l)
         say(f"SUMMARY reason={reason} last={last} wine_left={remaining} gamemode_log={log_path}")
 
 
@@ -358,6 +379,9 @@ def main():
     w.add_argument("--grace", type=float, default=10)
     w.add_argument("--close-after", type=float, help="gracefully close the game N seconds after its window appears")
     w.add_argument("--shot", action="store_true", help="save one small screenshot of the game window before cleanup")
+    w.add_argument("--autoplay", action="store_true",
+                   help="enter the game, measure frame times idle and while turning the camera, save screenshots")
+    w.add_argument("--turn", type=float, default=12, help="camera-turn phase length (s) with --autoplay")
     w.add_argument("--verbose", action="store_true", help="print gamepolicyd log lines")
     w.set_defaults(fn=cmd_watch)
     a = ap.parse_args()

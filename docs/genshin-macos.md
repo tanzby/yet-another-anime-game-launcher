@@ -33,4 +33,19 @@ scripts/dev/yaagl-diag ps
 scripts/dev/yaagl-diag kill --orphans
 ```
 
+`--autoplay` loads `native/gamehost/gamehost-dev.m` into the game (`YAAGL_GAMEHOST_DEV`). It clicks into the world, then logs frame-interval statistics for an idle phase and a camera-turn phase (`frames: … p50/p99/max, hitches50`) and saves a PNG of each from the game's own drawable. The turn is driven by `turner.exe` (`SendInput` inside the prefix). Synthetic AppKit events do not turn the camera. Build it with `LLVM_MINGW=… native/gamehost/build.sh`.
+
+```bash
+scripts/dev/yaagl-diag watch --launch --autoplay --timeout 200
+```
+
+Measured on 2026-10-04 (M5 Pro, DXMT, native full screen, fast continuous turn):
+
+| Retina | Phase | fps | p99 | Max | Hitches > 50 ms |
+| --- | --- | --- | --- | --- | --- |
+| On (3024×1898) | Idle | 51.8 | 20.5 ms | 32.7 ms | 0 |
+| On (3024×1898) | Turn | 54.0 | 25.4 ms | 42.6 ms | 0 |
+| Off (1512×949) | Idle | 59.8 | 17.2 ms | 36.2 ms | 0 |
+| Off (1512×949) | Turn | 59.8 | 19.1 ms | 25.1 ms | 0 |
+
 `gamemode=on` means `gamepolicyd` reported both `isIdentifiedGame=1` and `isGameFullscreen=1` (logged in `logs/gamehost.log`). Game progress can be checked in `wineprefix/drive_c/users/crossover/AppData/LocalLow/miHoYo/原神/output_log.txt` (`Genshin Start Log:` lines).

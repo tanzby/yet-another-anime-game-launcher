@@ -52,16 +52,43 @@ static void *msgSend, *msgSendStret;
 static id *nsApp;
 
 static int logFd = -1;
-static void say(const char *fmt, ...) {
+static void vsay(const char *fmt, va_list ap) {
   if (logFd < 0) return;
   char buf[512];
-  va_list ap;
-  va_start(ap, fmt);
   int n = vsnprintf(buf, sizeof buf - 1, fmt, ap);
-  va_end(ap);
   if (n > (int)sizeof buf - 2) n = sizeof buf - 2;
   buf[n++] = '\n';
   write(logFd, buf, n);
+}
+static void say(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vsay(fmt, ap);
+  va_end(ap);
+}
+/* Shared with gamehost-dev.dylib. */
+__attribute__((visibility("default"))) void gamehost_say(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vsay(fmt, ap);
+  va_end(ap);
+}
+
+/* YAAGL_GAMEHOST_DEV: load the development companion (frame statistics,
+ * scripted input, screenshots) next to this library. */
+static void startDev(id win) {
+  if (!getenv("YAAGL_GAMEHOST_DEV")) return;
+  Dl_info info;
+  char path[1024];
+  if (!dladdr((void *)startDev, &info) || !info.dli_fname) return;
+  snprintf(path, sizeof path, "%s", info.dli_fname);
+  char *slash = strrchr(path, '/');
+  if (!slash) return;
+  snprintf(slash + 1, path + sizeof path - slash - 1, "yaagl-gamehost-dev.dylib");
+  void *dev = dlopen(path, RTLD_NOW);
+  void (*start)(void *) = dev ? dlsym(dev, "gamehost_dev_start") : NULL;
+  if (start) start(win);
+  else say("gamehost: dev companion unavailable: %s", dlerror());
 }
 
 static id sendId(id o, const char *s) { return ((id(*)(id, SEL))msgSend)(o, selName(s)); }
@@ -188,6 +215,7 @@ static void tick(void *ctx) {
     ((void (*)(id, SEL, id))toggle)(win, selName("toggleFullScreen:"), NULL);
     Rect f = sendRect(win, "frame");
     say("gamehost: toggled native full screen for window %p (%.0fx%.0f)", win, f.w, f.h);
+    startDev(win);
     return;
   }
 }
