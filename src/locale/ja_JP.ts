@@ -113,6 +113,8 @@ export const ja_JP: typeof zh_CN = {
   SETTING_BLOCK_NET: "起動修正（ホストのブロック）",
   SETTING_TIMEOUT_FIX: "タイムアウト修正",
   SETTING_GAME_MODE: "ネイティブフルスクリーン + ゲームモード",
+  SETTING_METALFX_UPSCALE:
+    "MetalFX アップスケーリング（半解像度で描画し Retina で出力）",
   SETTING_LICENSES: "ライセンス",
   SETTING_ENABLE_HDR: "HDR有効",
 

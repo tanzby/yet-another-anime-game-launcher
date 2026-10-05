@@ -46,6 +46,7 @@ import createBlockNet from "./config/block-net";
 import createResolution from "./config/resolution";
 import createTimeoutFix from "./config/timeout-fix";
 import createGameMode from "./config/game-mode";
+import createMetalFxUpscale from "./config/metalfx-upscale";
 import { createEnableHDRConfig } from "./config/enable-hdr";
 import { getGameVersion } from "../unity";
 import {
@@ -310,6 +311,7 @@ export async function createHK4EChannelClient({
       const [RES] = await createResolution({ locale, config });
       const [TF] = await createTimeoutFix({ locale, config });
       const [GM] = await createGameMode({ locale, config });
+      const [MFX] = await createMetalFxUpscale({ locale, config });
 
       return function () {
         return [
@@ -323,6 +325,7 @@ export async function createHK4EChannelClient({
           <RES />,
           <TF />,
           <GM />,
+          <MFX />,
         ];
       };
     },

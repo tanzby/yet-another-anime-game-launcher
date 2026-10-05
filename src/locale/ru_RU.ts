@@ -113,6 +113,8 @@ export const ru_RU: typeof zh_CN = {
   SETTING_BLOCK_NET: "Launch Fix(block hosts)",
   SETTING_TIMEOUT_FIX: "Timeout Fix (Исправление тайм-аута)",
   SETTING_GAME_MODE: "Нативный полноэкранный режим + Игровой режим",
+  SETTING_METALFX_UPSCALE:
+    "Масштабирование MetalFX (рендер в половинном разрешении, вывод Retina)",
   SETTING_LICENSES: "Лицензии",
 
   SETTING_ENABLE_HDR: "Включить HDR",

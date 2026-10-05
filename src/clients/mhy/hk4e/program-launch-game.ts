@@ -106,7 +106,11 @@ export async function* launchGameProgram({
   // Leftovers from an earlier session (e.g. orphaned driver hosts) would
   // otherwise keep running alongside the new one.
   await wine.shutdown();
-  await wine.setProps(config);
+  // MetalFX upscaling renders at the non-Retina size and upscales 2x to the
+  // Retina drawable, so Wine must report the non-Retina size.
+  const metalFx =
+    config.metalFxUpscale && wine.attributes.renderBackend == "dxmt";
+  await wine.setProps({ ...config, retina: config.retina && !metalFx });
   if (config.hk4eEnableHDR) {
     await applyHDRRegistry({ wine, server });
   }
@@ -192,6 +196,7 @@ cd /d "${wine.toWinePath(gameDir)}"
               DXMT_LOG_PATH: yaaglDir,
               DXMT_CONFIG: "d3d11.preferredMaxFrameRate=60;",
               DXMT_CONFIG_FILE: join(yaaglDir, "dxmt.conf"),
+              DXMT_METALFX_SPATIAL_SWAPCHAIN: metalFx ? "1" : "",
               GST_PLUGIN_FEATURE_RANK: "atdec:MAX,avdec_h264:MAX",
             }
           : {

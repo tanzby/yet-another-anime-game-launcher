@@ -112,6 +112,8 @@ export const en: typeof zh_CN = {
   SETTING_BLOCK_NET: "Launch Fix(block hosts)",
   SETTING_TIMEOUT_FIX: "Timeout Fix",
   SETTING_GAME_MODE: "Native full screen + Game Mode",
+  SETTING_METALFX_UPSCALE:
+    "MetalFX upscaling (half-resolution render, Retina output)",
   SETTING_LICENSES: "Licenses",
   SETTING_ENABLE_HDR: "Enable HDR",
 
