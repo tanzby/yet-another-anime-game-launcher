@@ -41,5 +41,6 @@ server_secret.ts
 /sidecar/gamehost
 
 # Local tool files
-/.claude
+/.claude/*
+!/.claude/settings.json
 /pnpm-workspace.yaml

@@ -2,3 +2,4 @@
 # by scripts/dev/worktree-setup.sh (.gitignore syntax, one path per line).
 bin/
 neutralino.js
+src/clients/secret.ts

@@ -8,7 +8,7 @@ Every feature, fix or experiment is developed and discussed in its own git workt
 
 - **Keep the main checkout clean.** It stays on `main` and is shared by every session and tool. Concurrent edits there overwrite each other's work and git state.
 - **Create worktrees under `.claude/worktrees/<name>`** (gitignored), branched from `origin/main`.
-- **Run `scripts/dev/worktree-setup.sh` first.** It is idempotent: it brings in the gitignored build inputs and installs dependencies.
+- **Run `scripts/dev/worktree-setup.sh` first** for a plain `git worktree add` worktree. It is idempotent: it brings in the gitignored build inputs and installs dependencies. Claude Code worktrees come ready (see `CLAUDE.md`).
 - **Land changes via PR.** `main` is protected: a PR and the `tsc` check are required, and PRs are squash-merged. Remove the worktree and branch after merging.
 - **Only one worktree may run the game at a time** (install the app, run the game or `scripts/dev/yaagl-diag`). All worktrees share `/Applications/Yaagl.app`, `~/Library/Application Support/Yaagl` (Wine, prefix, settings) and the game files.
 - **The stash stack is shared by all worktrees.** Never use bare `git stash` / `git stash pop`; prefer a WIP commit.
