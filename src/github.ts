@@ -1,50 +1,27 @@
-import { log, timeout } from "./utils";
+import { timeout } from "./utils";
 
-const END_POINTS = ["", "https://ghp.3shain.uk/"];
+// Direct only: this fork does not route release metadata (which carries the
+// update download URLs) through upstream's proxy. An unreachable GitHub must
+// not block startup; callers treat a rejected api() as "update check failed".
+const API_TIMEOUT_MS = 10000;
 
 export async function createGithubEndpoint() {
-  await log(`Checking github endpoints`);
-  let fastest: string | null = null;
-  for (let i = 0; i < 3; i++) {
-    try {
-      fastest = await Promise.race([
-        ...END_POINTS.map(prefix =>
-          fetch(`${prefix}https://api.github.com/octocat`)
-            .then(x => x.text())
-            .then(x => prefix)
-            .catch(() => timeout(5000))
-        ),
-        timeout(5000),
-      ]);
-      break;
-    } catch (e) {
-      await log(`Github endpoint check failed (attempt ${i + 1}/3): ${e}`);
-    }
-  }
-  if (fastest === null) {
-    throw new Error("Failed to connect to GitHub");
-  }
-
-  fastest == "" || (await log(`Using github proxy ${fastest}`));
-
   function api(path: `/${string}`): Promise<unknown> {
-    return fetch(`${fastest}https://api.github.com${path}`).then(x => {
-      if (x.status == 200 || x.status == 301 || x.status == 302) {
-        return x.json();
-      }
-      return Promise.reject(
-        new Error(`Request failed: ${x.status} ${x.statusText} (${x.url})`)
-      );
-    });
-  }
-
-  function acceleratedPath(path: string) {
-    return `${fastest}${path}`;
+    return Promise.race([
+      fetch(`https://api.github.com${path}`).then(x => {
+        if (x.status == 200 || x.status == 301 || x.status == 302) {
+          return x.json();
+        }
+        return Promise.reject(
+          new Error(`Request failed: ${x.status} ${x.statusText} (${x.url})`)
+        );
+      }),
+      timeout(API_TIMEOUT_MS),
+    ]);
   }
 
   return {
     api,
-    acceleratedPath,
   };
 }
 
