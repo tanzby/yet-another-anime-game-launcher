@@ -14,7 +14,9 @@ import {
 } from "./utils";
 import { CommonUpdateProgram } from "./common-update-ui";
 
-const owner = "3shain";
+// Self-update from this fork's releases; upstream's would replace the sidecar
+// (incl. gamehost) and resources.neu with upstream builds.
+const owner = "tanzby";
 const repo = "yet-another-anime-game-launcher";
 
 export async function createUpdater(deps: { github: Github; aria2: Aria2 }) {

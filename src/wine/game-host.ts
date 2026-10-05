@@ -15,6 +15,9 @@ import {
 const SHIM = "./sidecar/gamehost/yaagl-wine-shim";
 const DYLIB = "./sidecar/gamehost/yaagl-gamehost.dylib";
 const BUNDLE = "./YaaglGame.app";
+// Still upstream's namespace, as is applicationId in neutralino.config.json;
+// renaming resets the LaunchServices registration and TCC grants, so it is
+// deferred to a dedicated distribution. Change both together.
 const BUNDLE_ID = "com.3shain.yaagl.game";
 const LSREGISTER =
   "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
