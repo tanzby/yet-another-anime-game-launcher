@@ -1,0 +1,4 @@
+# Gitignored inputs copied into new worktrees: by Claude Code on creation and
+# by scripts/dev/worktree-setup.sh (.gitignore syntax, one path per line).
+bin/
+neutralino.js

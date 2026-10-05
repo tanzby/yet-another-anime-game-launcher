@@ -1,4 +1,6 @@
 manifest_ldiff_pb2.py
 manifest_pb2.py
 .cache/
-build/
+# Anchored, no trailing slash: also matches the symlink made by
+# scripts/dev/worktree-setup.sh.
+/build
