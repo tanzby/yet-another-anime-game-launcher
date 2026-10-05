@@ -1,0 +1,7 @@
+# Gitignored files Claude Code copies into new worktrees (.gitignore syntax).
+# Only small inputs that are not regenerated cheaply; scripts/dev/worktree-setup.sh
+# installs node_modules and links sophon_server/build.
+bin/
+neutralino.js
+pnpm-workspace.yaml
+src/clients/secret.ts
