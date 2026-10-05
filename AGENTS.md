@@ -16,7 +16,7 @@ Every feature, fix or experiment is developed and discussed in its own git workt
 Plain git:
 
 ```bash
-git worktree add .claude/worktrees/<name> -b <branch> origin/main
+git fetch origin && git worktree add .claude/worktrees/<name> -b <branch> origin/main
 git worktree remove .claude/worktrees/<name>   # after merge, then git branch -D <branch>
 ```
 
