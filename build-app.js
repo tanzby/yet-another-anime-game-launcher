@@ -93,6 +93,8 @@ const { IconIcns } = require("@shockpkg/icon-encoder");
 
   const appname = config.cli.binaryName;
   const binaryName = `${config.cli.binaryName}-mac_x64`;
+  // Release builds take the version from the git tag (see build-ontag.yaml).
+  const bundleVersion = process.env["YAAGL_VERSION"] || config.version;
 
   // read package.json
   const pkg = await fs.readJSON(path.resolve(process.cwd(), "package.json"));
@@ -323,9 +325,9 @@ PATH_LAUNCH="$(dirname "$CONTENTS_DIR")" exec "$SCRIPT_DIR/${appname}" --path="$
         <key>CFBundlePackageType</key>
         <string>APPL</string>
         <key>CFBundleVersion</key>
-        <string>${config.version}</string>
+        <string>${bundleVersion}</string>
         <key>CFBundleShortVersionString</key>
-        <string>${config.version}</string>
+        <string>${bundleVersion}</string>
         <key>NSHumanReadableCopyright</key>
         <string>Copyright © 2023 3Shain.</string>
         <key>LSMinimumSystemVersion</key>

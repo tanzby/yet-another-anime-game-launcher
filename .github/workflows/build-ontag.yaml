@@ -1,4 +1,4 @@
-name: "Build Latest (when new tag created)"
+name: "Release Genshin (CN) on tag"
 on:
   push:
     tags:
@@ -7,12 +7,16 @@ env:
   YAAGL_VERSION: ${{ github.ref_name }}
 permissions:
   contents: "write"
-  packages: "write"
-  pull-requests: "read"
 jobs:
   build:
     runs-on: macos-latest
     steps:
+      - name: Check tag is semver
+        # The in-app updater compares tags with semver gt().
+        run: |
+          [[ "$YAAGL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || {
+            echo "Tag '$YAAGL_VERSION' is not semver (e.g. 0.1.0)"; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v3
 
@@ -77,46 +81,19 @@ jobs:
           ./configure.sh
           YAAGL_CHANNEL_CLIENT=hk4ecn node ./build-app.js
           cp dist/Yaagl/resources.neu resources_hk4ecn.neu
-          YAAGL_CHANNEL_CLIENT=hk4eos node ./build-app.js
-          cp dist/Yaagl/resources.neu resources_hk4eos.neu 
-          YAAGL_CHANNEL_CLIENT=bh3glb node ./build-app.js
-          cp dist/Yaagl/resources.neu resources_bh3glb.neu
-          YAAGL_CHANNEL_CLIENT=hkrpgcn node ./build-app.js
-          cp dist/Yaagl/resources.neu resources_hkrpgcn.neu
-          YAAGL_CHANNEL_CLIENT=hkrpgos node ./build-app.js
-          cp dist/Yaagl/resources.neu resources_hkrpgos.neu
-          YAAGL_CHANNEL_CLIENT=napcn node ./build-app.js
-          cp dist/Yaagl/resources.neu resources_napcn.neu
-          YAAGL_CHANNEL_CLIENT=napos node ./build-app.js
-          cp dist/Yaagl/resources.neu resources_napos.neu
 
-      - name: Tar app
+      - name: Package
         run: |
+          # The in-app updater pulls the sidecar from this tarball.
           tar -zcf Yaagl.app.tar.gz Yaagl.app
-          tar -zcf "Yaagl OS.app.tar.gz" "Yaagl OS.app"
-          tar -zcf "Yaagl Honkai Global.app.tar.gz" "Yaagl Honkai Global.app"
-          tar -zcf "Yaagl HSR.app.tar.gz" "Yaagl HSR.app"
-          tar -zcf "Yaagl HSR OS.app.tar.gz" "Yaagl HSR OS.app"
-          tar -zcf "Yaagl ZZZ.app.tar.gz" "Yaagl ZZZ.app"
-          tar -zcf "Yaagl ZZZ OS.app.tar.gz" "Yaagl ZZZ OS.app"
-      - name: Generate prerelease
-        uses: "marvinpinto/action-automatic-releases@latest"
-        with:
-          repo_token: "${{ secrets.GITHUB_TOKEN }}"
-          draft: true
-          title: "Release ${{ github.ref_name }}"
-          files: |
-            Yaagl.app.tar.gz
-            Yaagl OS.app.tar.gz
-            Yaagl Honkai Global.app.tar.gz
-            Yaagl HSR.app.tar.gz
-            Yaagl HSR OS.app.tar.gz
-            Yaagl ZZZ.app.tar.gz
-            Yaagl ZZZ OS.app.tar.gz
-            resources_hk4ecn.neu
-            resources_hk4eos.neu
-            resources_bh3glb.neu
-            resources_hkrpgcn.neu
-            resources_hkrpgos.neu
-            resources_napcn.neu
-            resources_napos.neu
+          mkdir dmg
+          ditto Yaagl.app dmg/Yaagl.app
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname Yaagl -srcfolder dmg -ov -format UDZO "Yaagl-$YAAGL_VERSION.dmg"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$YAAGL_VERSION" --title "Yaagl $YAAGL_VERSION" --generate-notes \
+            "Yaagl-$YAAGL_VERSION.dmg" Yaagl.app.tar.gz resources_hk4ecn.neu
