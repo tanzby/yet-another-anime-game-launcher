@@ -223,7 +223,15 @@ APST_DIR="$HOME/Library/Application Support/${appDistributionName}"
 echo $APST_DIR
 mkdir -p "$APST_DIR"
 CONTENTS_DIR="$(dirname "$SCRIPT_DIR")"
-rsync -rlptu "$CONTENTS_DIR/Resources/." "$APST_DIR"
+# -u keeps the resources.neu/sidecar the in-app updater wrote to APST_DIR, but
+# would also keep any newer stale copy over a freshly installed app. So copy
+# everything whenever the bundled resources.neu changes.
+BUNDLE_STAMP="$(md5 -q "$CONTENTS_DIR/Resources/resources.neu")"
+if [ "$BUNDLE_STAMP" = "$(cat "$APST_DIR/.bundle-stamp" 2>/dev/null)" ]; then
+  rsync -rlptu "$CONTENTS_DIR/Resources/." "$APST_DIR"
+else
+  rsync -rlpt "$CONTENTS_DIR/Resources/." "$APST_DIR" && echo "$BUNDLE_STAMP" > "$APST_DIR/.bundle-stamp"
+fi
 cd "$APST_DIR"
 PATH_LAUNCH="$(dirname "$CONTENTS_DIR")" exec "$SCRIPT_DIR/${appname}" --path="$APST_DIR"`
   );
