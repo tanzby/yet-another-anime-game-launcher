@@ -4,12 +4,12 @@ Yaagl is a macOS launcher for anime games. It runs the Windows game through a mo
 
 ## Workflow: one worktree per change
 
-Every feature, fix or experiment is developed and discussed in its own git worktree and branch, never in the main checkout.
+Every change is made in its own git worktree and branch, never in the main checkout.
 
-- **Keep the main checkout clean.** It stays on `main` and is shared by every session and tool. Concurrent edits there overwrite each other's work and git state.
-- **Create worktrees under `.claude/worktrees/<name>`** (gitignored), branched from `origin/main`.
-- **Run `scripts/dev/worktree-setup.sh` first** for a plain `git worktree add` worktree. It is idempotent: it brings in the gitignored build inputs and installs dependencies. Claude Code worktrees come ready (see `CLAUDE.md`).
-- **Land changes via PR.** `main` is protected: a PR and the `tsc` check are required, and PRs are squash-merged. Remove the worktree and branch after merging.
+- **Keep the main checkout clean.** It stays on `main` and is shared by every session and tool.
+- **Create worktrees under `.claude/worktrees/<name>`** (gitignored), branched from `origin/main`. If it has no `node_modules`, run `scripts/dev/worktree-setup.sh` (idempotent) first.
+- **Land changes via PR.** `main` is protected (PR and `tsc` check required) and PRs are squash-merged.
+- **Clean up unasked after a merge or release**: remove the worktree and branch, fast-forward `main` in the main checkout, delete temp files, and remove other merged worktrees that no session is using. A squash-merged branch looks unmerged to git; it is safe to delete when `git merge-tree --write-tree origin/main <branch>` equals `git rev-parse 'origin/main^{tree}'`.
 - **Only one worktree may run the game at a time** (install the app, run the game or `scripts/dev/yaagl-diag`). All worktrees share `/Applications/Yaagl.app`, `~/Library/Application Support/Yaagl` (Wine, prefix, settings) and the game files.
 - **The stash stack is shared by all worktrees.** Never use bare `git stash` / `git stash pop`; prefer a WIP commit.
 
@@ -40,4 +40,4 @@ Verify game behavior with deterministic, time-boxed text output, not screenshots
 
 ## Fork notes
 
-Before a fork release, check for upstream-hardcoded values: the updater owner, the bundle id `com.3shain.yaagl`, the wine tag list in `src/wine/distro.ts`, and `CURRENT_DXMT_VERSION`. Only a tag push produces packages (`build-ontag.yaml`, draft release, semver tag). Apps are not codesigned.
+Before a fork release, check for upstream-hardcoded values: the updater owner, the bundle id `com.3shain.yaagl`, the wine tag list in `src/wine/distro.ts`, and `CURRENT_DXMT_VERSION`. Only a semver tag push produces packages: `build-ontag.yaml` publishes the release. Apps are not codesigned.
