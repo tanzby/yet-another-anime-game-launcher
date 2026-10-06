@@ -2,7 +2,8 @@
  * yaagl-gamehost: injected into the game's Wine process (wine-shim.c sets
  * DYLD_INSERT_LIBRARIES for it only) to put the game window into a native
  * macOS full-screen Space, which is what macOS Game Mode requires. Wine's mac driver only offers native full screen
- * for resizable windows, and the game's window is not.
+ * for resizable windows, and the game's window is not. In full screen the
+ * window covers the notch area too (see hookFullScreenFrame).
  *
  * Links only libSystem: the Wine host must not load AppKit early, so all
  * Objective-C access goes through the runtime, resolved after winemac.so
@@ -154,6 +155,26 @@ static void hookAdjust(id self, SEL _cmd, unsigned long behavior) {
   ((void (*)(id, SEL, unsigned long))origAdjust)(self, _cmd, behavior);
 }
 
+/* AppKit lays out a native full-screen window below the camera housing (the
+ * screen's safe area), which leaves a black strip along the top of a Mac with
+ * a notch, and the game renders at the full display size anyway. These
+ * private NSWindow getters give the full-screen frame and tile; the game
+ * window gets the whole screen instead. The tile getters are needed too:
+ * with only the first, the window falls back below the notch when it is
+ * ordered front again (e.g. after the app is hidden). */
+static const char *frameSelNames[] = {"_frameForFullScreenMode", "_tileFrameForFullScreen",
+                                      "_fullScreenTileFrame", "_visibleTileFrameForFullScreen"};
+#define FRAME_SELS (sizeof frameSelNames / sizeof *frameSelNames)
+static SEL frameSels[FRAME_SELS];
+static IMP frameOrigs[FRAME_SELS];
+static Rect hookFullScreenFrame(id self, SEL _cmd) {
+  id screen = self == fullscreenTarget ? sendId(self, "screen") : NULL;
+  if (screen) return sendRect(screen, "frame");
+  for (unsigned long i = 0; i < FRAME_SELS; i++)
+    if (frameSels[i] == _cmd) return ((Rect(*)(id, SEL))frameOrigs[i])(self, _cmd);
+  return (Rect){0, 0, 0, 0};
+}
+
 /* After the game window is closed the process should exit; if it is still
  * around this long, it is stuck in shutdown and only keeps Wine alive. The
  * launcher cannot time this out itself: its wait on steam.exe only returns
@@ -286,13 +307,20 @@ static void install(void) {
   }
   Method m = instanceMethod(wineWindowClass, selName("adjustFullScreenBehavior:"));
   if (m) origAdjust = setImpl(m, (IMP)hookAdjust);
+  unsigned long frameHooks = 0;
+  for (unsigned long i = 0; i < FRAME_SELS; i++) {
+    frameSels[i] = selName(frameSelNames[i]);
+    Method f = instanceMethod(wineWindowClass, frameSels[i]);
+    if (f) frameOrigs[i] = setImpl(f, (IMP)hookFullScreenFrame), frameHooks++;
+  }
   dispatch_source_t timer =
       dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
   dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC),
                             NSEC_PER_SEC / 2, NSEC_PER_SEC / 10);
   dispatch_source_set_event_handler_f(timer, tick);
   dispatch_resume(timer);
-  say("gamehost: installed in pid %d (adjust hook %s)", getpid(), m ? "on" : "missing");
+  say("gamehost: installed in pid %d (adjust hook %s, full-screen frame hooks %lu/%lu)", getpid(),
+      m ? "on" : "missing", frameHooks, FRAME_SELS);
 }
 
 static void onImage(const struct mach_header *mh, intptr_t slide) {
