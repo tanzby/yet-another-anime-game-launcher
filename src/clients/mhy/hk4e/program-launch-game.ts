@@ -107,9 +107,12 @@ export async function* launchGameProgram({
   // otherwise keep running alongside the new one.
   await wine.shutdown();
   // MetalFX upscaling renders at the non-Retina size and upscales 2x to the
-  // Retina drawable, so Wine must report the non-Retina size.
+  // Retina drawable, so Wine must report the non-Retina size. A custom
+  // resolution would be upscaled instead, so it takes precedence.
   const metalFx =
-    config.metalFxUpscale && wine.attributes.renderBackend == "dxmt";
+    config.metalFxUpscale &&
+    !config.resolutionCustom &&
+    wine.attributes.renderBackend == "dxmt";
   await wine.setProps({ ...config, retina: config.retina && !metalFx });
   if (config.hk4eEnableHDR) {
     await applyHDRRegistry({ wine, server });
