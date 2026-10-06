@@ -69,4 +69,34 @@ Turn stutter is first-use shader compilation on both backends. The cache is fill
 
 Volumetric fog was checked with the scene's own setting, using `--grade 9=1` (fog off) at the spawn point. Background luma was 160.6 for DXMT with fog on, 125.5 for DXMT with fog off, and 159.9 for GPTK with fog on. The fog is rendered, and GPTK renders it like DXMT. DXMT stays the default.
 
+### MetalFX upscaling
+
+DXMT has a MetalFX spatial-upscaling swap chain (`d3d11_swapchain.cpp` at `654f547`). It is turned on with `DXMT_METALFX_SPATIAL_SWAPCHAIN=1`, and `d3d11.metalSpatialUpscaleFactor` sets the factor (default 2). The game renders at the window size Wine reports, and MetalFX scales that by the factor into the layer's drawable. With Retina off (1512×949), the game renders at the non-Retina size and the output is the full 3024×1898. With Retina on, it would upscale 3024 to 6048, so the setting forces `RetinaMode=n`. There is no render-scale config key. The temporal paths don't apply: DXMT's `nvngx` (DLSS to MetalFX temporal) and GPTK's `D3DM_ENABLE_METALFX` both need the game to use DLSS, and Genshin ships no `nvngx`/DLSS DLLs.
+
+The setting is "MetalFX upscaling" (`config_metalfx_upscale`, off by default, DXMT only). It sets the variable and starts Wine with Retina off whatever the Retina setting is. It is ignored when a custom resolution is set, because DXMT would then upscale the custom size instead of the non-Retina screen size.
+
+Measured on 2026-10-05, same tool and spot. Each row is one run. Sharpness is the Laplacian variance of the luma of the drawable PNG at 3024×1898. Retina-off shots are upscaled 2× with `sips`, as the compositor does.
+
+| Config | Idle fps / p99 | Turn fps / p99 | Sharpness idle / turn |
+| --- | --- | --- | --- |
+| Retina on | 60.0 / 18.2 ms | 60.0 / 17.5 ms | 353 / 251 |
+| Retina on | 60.0 / 18.6 ms | 60.0 / 17.4 ms | 331 / 240 |
+| Retina off | 60.0 / 18.3 ms | 60.0 / 18.0 ms | 165 / 150 |
+| Retina off | 60.0 / 17.8 ms | 60.0 / 17.2 ms | 131 / 125 |
+| MetalFX | 60.0 / 17.2 ms | 60.1 / 18.6 ms | 255 / 194 |
+| MetalFX | 60.0 / 18.0 ms | 60.0 / 17.3 ms | 300 / 244 |
+| MetalFX (via the setting, built app) | 60.0 / 17.2 ms | 60.0 / 17.4 ms | — |
+| Retina on, render grade `2=9` | 60.0 / 17.4 ms | 60.0 / 17.3 ms | 244 / 223 |
+| Retina on, render grade `2=9` | 60.0 / 18.6 ms | 60.0 / 17.2 ms | 241 / 227 |
+| MetalFX, render grade `2=9` | 60.0 / 17.3 ms | 60.0 / 17.4 ms | 230 / 199 |
+| MetalFX, render grade `2=9` | 60.0 / 18.2 ms | 60.0 / 18.5 ms | 243 / 230 |
+
+No run had a hitch over 50 ms.
+
+- **Sharpness**: MetalFX is far sharper than Retina off and close to native. On crops, edges look as crisp as native, and fine stone texture is slightly smoothed.
+- **Frame rate**: these runs don't show a gain, because the spawn scene that day held 60 fps in every mode. That includes Retina on, which gave 52–54 fps on 2026-10-04, and Retina on at render grade 9 (1.5×). Grade 9 does take effect: it smooths the native image.
+- **GPU load**: `ioreg` utilization is measured at the current GPU clock. The GPU downclocks to just meet 60, so all modes read 73–91% and the readings can't show headroom. Measuring headroom needs `powermetrics` (sudo) or a scene that is GPU-bound at Retina size.
+- **Conclusion**: MetalFX does 1/4 of the 3D and UI pixel work of Retina for close-to-native sharpness, with no frame-pacing cost. Whether it lifts the GPU-bound 52–54 fps case is unproven until that scene is measured again.
+- **Verdict (2026-10-06, viewed in game)**: the MetalFX image looked only average. Native Retina resolution with lower in-game effects is the better trade-off when the frame rate is short. The setting stays available but off by default and is not recommended.
+
 `gamemode=on` means `gamepolicyd` reported both `isIdentifiedGame=1` and `isGameFullscreen=1` (logged in `logs/gamehost.log`). Game progress can be checked in `wineprefix/drive_c/users/crossover/AppData/LocalLow/miHoYo/原神/output_log.txt` (`Genshin Start Log:` lines).

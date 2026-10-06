@@ -107,6 +107,7 @@ export const zh_CN = {
   SETTING_BLOCK_NET: "Launch Fix(block hosts)",
   SETTING_TIMEOUT_FIX: "Timeout Fix",
   SETTING_GAME_MODE: "原生全屏 + 游戏模式",
+  SETTING_METALFX_UPSCALE: "MetalFX 超分（半分辨率渲染，Retina 输出）",
   SETTING_LICENSES: "Licenses", // TODO: Translate
   SETTING_ENABLE_HDR: "启用 HDR",
 
