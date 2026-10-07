@@ -150,66 +150,65 @@ struct BottomBarMain: View {
             case .predownloadAvailable:
                 HStack(spacing: 10) {
                     Label("\(proto.predownloadVersion) 可预下载 · 8.2 GB", systemImage: "tray.and.arrow.down")
-                    Button("预下载") { proto.startPredownload() }.buttonStyle(.glass)
+                    Button("预下载") { proto.startPredownload() }.buttonStyle(.bordered).buttonBorderShape(.capsule)
                 }
             case .error:
                 HStack(spacing: 10) {
                     Label("下载失败：网络连接已中断，进度已保留", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red).lineLimit(1)
-                    Button("查看日志") {}.buttonStyle(.glass)
+                    Button("查看日志") {}.buttonStyle(.bordered).buttonBorderShape(.capsule)
                 }
             default:
-                Text(proto.state == .notInstalled ? "约需 62.5 GB 可用空间" : "已是最新版本")
-                    .foregroundStyle(.secondary)
+                Text("需要约 62.5 GB 可用空间").foregroundStyle(.secondary)
             }
         }
     }
 
+    /// Whether the bar has something to say besides its buttons.
+    var hasStatus: Bool { proto.state != .ready }
+
+    /// One glass capsule: status (when there is any) + primary button + ⋯.
+    /// It shrinks to just the buttons when idle and grows leftwards when a
+    /// download, update notice or error appears.
     var bar: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                HStack(spacing: 18) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("原神").font(.title3.weight(.semibold))
-                        Text(proto.state == .notInstalled ? "未安装" : "\(proto.installedVersion) · 62.4 GB")
-                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                    }
-                    .frame(width: 110, alignment: .leading)
-                    Divider().frame(height: 32)
-                    status.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal, 20).padding(.vertical, 12)
-                .frame(maxWidth: .infinity)
-                .glassEffect(.regular, in: .capsule)
-
-                Button(action: proto.primaryTapped) {
-                    Label(proto.primary.title, systemImage: proto.primary.systemImage)
-                        .font(.title3.weight(.semibold))
-                        .frame(minWidth: 140, minHeight: 36)
-                }
-                .buttonStyle(.glassProminent)
-                .tint(proto.primary.tint)
-                .controlSize(.extraLarge)
-                .disabled(!proto.primary.enabled)
-
-                Menu {
-                    Button("检查文件完整性", systemImage: "checkmark.shield") { proto.repair() }
-                    Button("打开游戏目录", systemImage: "folder") {}
-                    Button("打开 Wine 命令行", systemImage: "terminal") {}
-                    Divider()
-                    OpenSettingsButton(label: true)
-                } label: {
-                    Image(systemName: "ellipsis").font(.title3.weight(.semibold))
-                        .frame(width: 52, height: 52)
-                        .contentShape(.circle)
-                }
-                .menuStyle(.button)
-                .menuIndicator(.hidden)
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .fixedSize()
+        HStack(spacing: 14) {
+            if hasStatus {
+                status
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 12)
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
             }
+            Button(action: proto.primaryTapped) {
+                Label(proto.primary.title, systemImage: proto.primary.systemImage)
+                    .font(.title3.weight(.semibold))
+                    .frame(minWidth: 132, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(proto.primary.tint)
+            .disabled(!proto.primary.enabled)
+
+            Menu {
+                Button("检查文件完整性", systemImage: "checkmark.shield") { proto.repair() }
+                Button("打开游戏目录", systemImage: "folder") {}
+                Button("打开 Wine 命令行", systemImage: "terminal") {}
+                Divider()
+                OpenSettingsButton(label: true)
+            } label: {
+                Image(systemName: "ellipsis").font(.title3.weight(.semibold))
+                    .frame(width: 44, height: 44)
+                    .contentShape(.circle)
+            }
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.plain)
+            .fixedSize()
         }
+        .padding(8)
+        .frame(maxWidth: hasStatus ? .infinity : nil)
+        .glassEffect(.regular, in: .capsule)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .animation(.smooth, value: hasStatus)
     }
 }
 

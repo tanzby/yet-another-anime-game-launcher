@@ -34,21 +34,17 @@ struct YaaglPrototypeApp: App {
         Settings {
             SettingsWindow()
         }
-        Window("关于 Yaagl", id: "about") {
-            AboutWindow()
-        }
-        .windowResizability(.contentSize)
-        .windowStyle(.hiddenTitleBar)
+
     }
 }
 
 struct AboutMenuItem: View {
-    @Environment(\.openWindow) private var openWindow
-    var body: some View { Button("关于 Yaagl") { openWindow(id: "about") } }
+    var body: some View { Button("关于 Yaagl") { About.show() } }
 }
 
 struct RootView: View {
     @Environment(Proto.self) private var proto
+    @Environment(\.openSettings) private var openSettings
     var body: some View {
         @Bindable var proto = proto
         ZStack(alignment: .top) {
@@ -64,7 +60,7 @@ struct RootView: View {
         .focusEffectDisabled()
         .onKeyPress(.leftArrow) { cycle(-1); return .handled }
         .onKeyPress(.rightArrow) { cycle(1); return .handled }
-        .task { await SnapshotRunner.runIfRequested(proto) }
+        .task { await SnapshotRunner.runIfRequested(proto, openSettings: openSettings) }
     }
 
     func cycle(_ d: Int) {
@@ -104,7 +100,7 @@ struct DebugBar: View {
 enum SnapshotRunner {
     static let enabled = ProcessInfo.processInfo.environment["PROTO_SHOTS"] != nil
 
-    static func runIfRequested(_ proto: Proto) async {
+    static func runIfRequested(_ proto: Proto, openSettings: OpenSettingsAction) async {
         guard let dir = ProcessInfo.processInfo.environment["PROTO_SHOTS"] else { return }
         let url = URL(fileURLWithPath: dir)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -118,34 +114,36 @@ enum SnapshotRunner {
             for s in states {
                 proto.state = s
                 proto.progress = 0.42
-                try? await Task.sleep(for: .milliseconds(400))
+                NSApp.activate()
+                NSApp.windows.first(where: { $0.title.hasPrefix("Yaagl") })?.makeKeyAndOrderFront(nil)
+                try? await Task.sleep(for: .milliseconds(600))
                 if let w = NSApp.windows.first(where: { $0.title.hasPrefix("Yaagl") }) {
                     capture(w, to: url.appending(path: "main-\(v.rawValue)-\(s.rawValue).png"))
                 }
             }
         }
-        let win = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 760, height: 540),
-                           styleMask: [.titled], backing: .buffered, defer: false)
-        win.isReleasedWhenClosed = false
-        win.setContentSize(NSSize(width: 760, height: 540))
-        for pane in SettingsPane.allCases {
-            win.title = pane.rawValue
-            win.contentView = NSHostingView(rootView: SettingsWindowPreview(pane: pane))
-            win.orderFrontRegardless()
-            try? await Task.sleep(for: .milliseconds(600))
-            capture(win, to: url.appending(path: "settings-\(pane).png"))
+        // The real Settings scene, one capture per pane.
+        let nav = SettingsNav.shared
+        openSettings()
+        try? await Task.sleep(for: .seconds(1))
+        let main = NSApp.windows.first(where: { $0.title.hasPrefix("Yaagl") })
+        if let win = NSApp.windows.first(where: { $0.isVisible && $0 !== main && $0.frame.width > 300 }) {
+            for pane in SettingsPane.allCases {
+                nav.pane = pane
+                try? await Task.sleep(for: .milliseconds(700))
+                capture(win, to: url.appending(path: "settings-\(pane).png"))
+            }
+            nav.pane = .wine
+            nav.previewWineConfirm = true
+            try? await Task.sleep(for: .milliseconds(900))
+            capture(win, to: url.appending(path: "settings-wine-confirm.png"))
+            win.close()
         }
-        win.title = ""
-        win.contentView = NSHostingView(rootView: AboutWindow())
-        win.setContentSize(win.contentView!.fittingSize)
-        try? await Task.sleep(for: .milliseconds(500))
-        capture(win, to: url.appending(path: "about-window.png"))
-        win.setContentSize(NSSize(width: 760, height: 540))
-        win.title = "Wine"
-        win.contentView = NSHostingView(rootView: SettingsWindowPreview(pane: .wine, confirm: true))
-        try? await Task.sleep(for: .milliseconds(800))
-        capture(win, to: url.appending(path: "settings-wine-confirm.png"))
-        win.orderOut(nil)
+        About.show()
+        try? await Task.sleep(for: .milliseconds(700))
+        if let panel = NSApp.windows.first(where: { $0.isVisible && $0 !== main }) {
+            capture(panel, to: url.appending(path: "about-panel.png"))
+        }
         NSApp.terminate(nil)
     }
 
@@ -167,21 +165,3 @@ enum SnapshotRunner {
     }
 }
 
-/// Settings window body with a given pane selected, for snapshots.
-struct SettingsWindowPreview: View {
-    var pane: SettingsPane
-    var confirm = false
-    @State private var sel: SettingsPane?
-    var body: some View {
-        NavigationSplitView {
-            List(SettingsPane.allCases, selection: $sel) { p in
-                Label(p.rawValue, systemImage: p.icon).tag(p)
-            }
-            .navigationSplitViewColumnWidth(180)
-        } detail: {
-            if confirm { WineSettings(previewConfirm: true) } else { pane.content }
-        }
-        .frame(width: 760, height: 540)
-        .onAppear { sel = pane }
-    }
-}

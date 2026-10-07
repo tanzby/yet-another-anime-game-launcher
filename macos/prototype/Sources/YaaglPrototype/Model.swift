@@ -130,17 +130,17 @@ final class Proto {
         switch state {
         case .wineSetup: .init(title: "准备中…", systemImage: "hourglass", enabled: false)
         case .notInstalled: .init(title: "安装游戏", systemImage: "arrow.down.circle.fill", enabled: true)
-        case .installing: .init(title: "暂停", systemImage: "pause.fill", enabled: true, tint: .gray)
+        case .installing: .init(title: "暂停", systemImage: "pause.fill", enabled: true)
         case .installPaused: .init(title: "继续", systemImage: "play.fill", enabled: true)
         case .ready, .predownloadAvailable, .predownloading:
             .init(title: "开始游戏", systemImage: "play.fill", enabled: true)
         case .updateAvailable: .init(title: "更新游戏", systemImage: "arrow.triangle.2.circlepath", enabled: true, tint: .orange)
-        case .updating: .init(title: "暂停", systemImage: "pause.fill", enabled: true, tint: .gray)
+        case .updating: .init(title: "暂停", systemImage: "pause.fill", enabled: true)
         case .updatePaused: .init(title: "继续", systemImage: "play.fill", enabled: true)
         case .repairing: .init(title: "修复中…", systemImage: "wrench.and.screwdriver", enabled: false)
         case .launching: .init(title: "启动中…", systemImage: "hourglass", enabled: false)
         case .running: .init(title: "运行中", systemImage: "gamecontroller.fill", enabled: false, tint: .green)
-        case .error: .init(title: "重试", systemImage: "arrow.clockwise", enabled: true, tint: .red)
+        case .error: .init(title: "重试", systemImage: "arrow.clockwise", enabled: true)
         }
     }
 

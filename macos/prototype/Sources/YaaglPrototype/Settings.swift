@@ -1,5 +1,6 @@
 // PROTOTYPE — throwaway. Settings pages, items mirror src/config + hk4e/config.
 // All values are local @State; nothing is saved.
+import AppKit
 import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
@@ -25,18 +26,28 @@ enum SettingsPane: String, CaseIterable, Identifiable {
 
 /// Style 1 (chosen): a separate Settings window (⌘,) with a sidebar,
 /// like macOS System Settings.
+@Observable @MainActor
+final class SettingsNav {
+    static let shared = SettingsNav()
+    var pane: SettingsPane? = .general
+    var previewWineConfirm = false
+}
+
 struct SettingsWindow: View {
-    @State private var pane: SettingsPane? = .general
+    @Bindable private var nav = SettingsNav.shared
     var body: some View {
         NavigationSplitView {
-            List(SettingsPane.allCases, selection: $pane) { p in
+            List(SettingsPane.allCases, selection: $nav.pane) { p in
                 Label(p.rawValue, systemImage: p.icon).tag(p)
             }
             .navigationSplitViewColumnWidth(180)
             .toolbar(removing: .sidebarToggle)
         } detail: {
-            (pane ?? .general).content
-                .navigationTitle(pane?.rawValue ?? "")
+            Group {
+                if nav.pane == .wine && nav.previewWineConfirm { WineSettings(previewConfirm: true) }
+                else { (nav.pane ?? .general).content }
+            }
+            .navigationTitle(nav.pane?.rawValue ?? "")
         }
         .frame(width: 760, height: 540)
     }
@@ -204,40 +215,19 @@ struct AdvancedSettings: View {
     }
 }
 
-/// "关于 Yaagl" is its own small window from the app menu, not a settings tab.
-struct AboutWindow: View {
-    var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "gamecontroller.fill")
-                .font(.system(size: 40)).foregroundStyle(.white)
-                .frame(width: 72, height: 72)
-                .background(.blue.gradient, in: .rect(cornerRadius: 16))
-            VStack(spacing: 2) {
-                Text("Yaagl").font(.title2.bold())
-                Text("版本 1.0.0 (prototype)").foregroundStyle(.secondary)
-            }
-            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
-                GridRow { Text("Wine").foregroundStyle(.secondary); Text("11.0-1 CrossOver") }
-                GridRow { Text("DXMT").foregroundStyle(.secondary); Text("v0.70") }
-            }
-            .font(.callout)
-            Divider()
-            DisclosureGroup("开源许可") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("steam.exe 与 lsteamclient.dll — Valve, BSD-3-Clause")
-                    Text("Sparkle — MIT")
-                    Text("DXMT — …")
-                }
-                .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
-            }
-            HStack {
-                Link("GitHub", destination: URL(string: "https://github.com/tanzby/yet-another-anime-game-launcher")!)
-                Spacer()
-                Button("检查更新…") {}
-            }
-            .font(.callout)
-        }
-        .padding(24)
-        .frame(width: 340)
+/// "关于 Yaagl" uses the system's standard About panel; licenses go in
+/// its credits. No custom window.
+@MainActor
+enum About {
+    static func show() {
+        let credits = NSAttributedString(
+            string: "Wine 11.0-1 CrossOver · DXMT v0.70\n\n开源许可\nsteam.exe 与 lsteamclient.dll — Valve, BSD-3-Clause\nSparkle — MIT",
+            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor])
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Yaagl",
+            .applicationVersion: "1.0.0",
+            .version: "prototype",
+            .credits: credits,
+        ])
     }
 }
