@@ -103,43 +103,60 @@ struct BottomBarMain: View {
         .safeAreaInset(edge: .bottom, spacing: 0) { bar }
     }
 
+    /// Events go to macOS Notification Center (UNUserNotificationCenter in
+    /// the real app). `swift run` has no bundle, so this draws a stand-in.
     @ViewBuilder var notices: some View {
-        VStack(alignment: .trailing, spacing: 10) {
-            if proto.state == .error {
-                card(icon: "exclamationmark.triangle.fill", tint: .red, title: "下载失败", body: proto.errorMessage) {
-                    Button("重试") { proto.primaryTapped() }
-                    Button("查看日志") {}
+        if let n = systemNotification {
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "gamecontroller.fill")
+                        .font(.title2).foregroundStyle(.white)
+                        .frame(width: 38, height: 38)
+                        .background(.blue.gradient, in: .rect(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack { Text("Yaagl").font(.headline); Spacer(); Text("现在").font(.caption).foregroundStyle(.secondary) }
+                        Text(n.title).font(.callout.weight(.semibold))
+                        Text(n.body).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                    }
                 }
-            }
-            if proto.state == .updateAvailable {
-                card(icon: "arrow.triangle.2.circlepath", tint: .orange, title: "新版本 \(proto.newVersion)",
-                     body: "需要下载 12.3 GB。更新前无法启动游戏。") { EmptyView() }
-            }
-            if proto.showsPredownloadOffer {
-                card(icon: "tray.and.arrow.down.fill", tint: .green, title: "\(proto.predownloadVersion) 可预下载",
-                     body: "8.2 GB，后台下载，不影响游戏。") {
-                    Button("开始预下载") { proto.startPredownload() }
-                    Button("稍后") { proto.predownloadDone = true }
-                }
-            }
-            if proto.predownloadDone && proto.state == .ready {
-                card(icon: "checkmark.seal.fill", tint: .green, title: "\(proto.predownloadVersion) 预下载完成",
-                     body: "新版本上线后只需几分钟即可更新。") { EmptyView() }
+                .padding(12)
+                .frame(width: 340)
+                .background(.regularMaterial, in: .rect(cornerRadius: 16))
+                .shadow(radius: 10)
+                Text("[示意] macOS 系统通知，窗口在后台也会弹出")
+                    .font(.caption2).foregroundStyle(.white.opacity(0.8))
             }
         }
-        .frame(width: 300)
     }
 
-    func card<A: View>(icon: String, tint: Color, title: String, body: String,
-                       @ViewBuilder actions: () -> A) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: icon).font(.headline).foregroundStyle(tint)
-            Text(body).font(.callout).fixedSize(horizontal: false, vertical: true)
-            HStack { actions() }.controlSize(.small)
+    var systemNotification: (title: String, body: String)? {
+        switch proto.state {
+        case .updateAvailable: ("原神 \(proto.newVersion) 已发布", "需要下载 12.3 GB，更新后才能启动游戏。")
+        case .predownloadAvailable: ("\(proto.predownloadVersion) 可以预下载了", "8.2 GB，后台下载，不影响游戏。")
+        case .error: ("下载失败", "网络连接已中断。已下载的部分会保留，重试会从断点继续。")
+        default: nil
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: .rect(cornerRadius: 12))
+    }
+
+    /// Persistent state stays in the window; notifications are transient.
+    @ViewBuilder var inlineStatus: some View {
+        switch proto.state {
+        case .updateAvailable:
+            Label("新版本 \(proto.newVersion) · 需下载 12.3 GB", systemImage: "arrow.triangle.2.circlepath")
+                .foregroundStyle(.orange)
+        case .predownloadAvailable:
+            HStack {
+                Label("\(proto.predownloadVersion) 可预下载 · 8.2 GB", systemImage: "tray.and.arrow.down")
+                Button("预下载") { proto.startPredownload() }.controlSize(.regular)
+            }
+        case .error:
+            HStack {
+                Label("下载失败：网络连接已中断，进度已保留", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red).lineLimit(1)
+                Button("查看日志") {}.controlSize(.regular)
+            }
+        default: Spacer()
+        }
     }
 
     var bar: some View {
@@ -156,7 +173,7 @@ struct BottomBarMain: View {
                     Label("游戏运行中 · 已运行 00:12:34", systemImage: "gamecontroller").foregroundStyle(.secondary)
                 } else if proto.state == .launching {
                     HStack { ProgressView().controlSize(.small); Text("正在启动 Wine…") }
-                } else { Spacer() }
+                } else { inlineStatus }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
