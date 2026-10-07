@@ -41,3 +41,17 @@ Verify game behavior with deterministic, time-boxed text output, not screenshots
 ## Fork notes
 
 Before a fork release, check for upstream-hardcoded values: the updater owner, the bundle id `com.3shain.yaagl`, the wine tag list in `src/wine/distro.ts`, and `CURRENT_DXMT_VERSION`. Only a semver tag push produces packages: `build-ontag.yaml` publishes the release. Apps are not codesigned.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this fork's GitHub Issues (`gh` CLI). See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `CONTEXT.md` and `docs/adr/`, created lazily. See `docs/agents/domain.md`.
