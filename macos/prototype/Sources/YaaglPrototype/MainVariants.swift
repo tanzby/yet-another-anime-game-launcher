@@ -177,9 +177,6 @@ struct BottomBarMain: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
-                if proto.state == .running {
-                    Button("强制结束", role: .destructive) { proto.forceQuit() }
-                }
                 Button(action: proto.primaryTapped) {
                     Label(proto.primary.title, systemImage: proto.primary.systemImage)
                         .font(.title3.bold()).frame(minWidth: 130)

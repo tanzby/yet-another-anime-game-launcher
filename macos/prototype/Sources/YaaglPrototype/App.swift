@@ -106,7 +106,7 @@ enum SnapshotRunner {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         proto.showDebugBar = false
         try? await Task.sleep(for: .seconds(1))
-        let states: [GameState] = [.notInstalled, .installing, .ready, .updateAvailable,
+        let states: [GameState] = [.notInstalled, .installing, .ready, .updateAvailable, .updating,
                                    .predownloadAvailable, .repairing, .running, .error]
         for v in MainVariant.allCases {
             proto.variant = v
@@ -119,14 +119,15 @@ enum SnapshotRunner {
                 }
             }
         }
-        let win = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 560, height: 560),
+        let win = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 760, height: 540),
                            styleMask: [.titled], backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
+        win.setContentSize(NSSize(width: 760, height: 540))
         for pane in SettingsPane.allCases {
             win.title = pane.rawValue
-            win.contentView = NSHostingView(rootView: pane.content.frame(width: 560, height: 560))
+            win.contentView = NSHostingView(rootView: SettingsWindowPreview(pane: pane))
             win.orderFrontRegardless()
-            try? await Task.sleep(for: .milliseconds(500))
+            try? await Task.sleep(for: .milliseconds(600))
             capture(win, to: url.appending(path: "settings-\(pane).png"))
         }
         win.title = ""
@@ -134,9 +135,9 @@ enum SnapshotRunner {
         win.setContentSize(win.contentView!.fittingSize)
         try? await Task.sleep(for: .milliseconds(500))
         capture(win, to: url.appending(path: "about-window.png"))
-        win.setContentSize(NSSize(width: 560, height: 560))
+        win.setContentSize(NSSize(width: 760, height: 540))
         win.title = "Wine"
-        win.contentView = NSHostingView(rootView: WineSettings(previewConfirm: true).frame(width: 560, height: 560))
+        win.contentView = NSHostingView(rootView: SettingsWindowPreview(pane: .wine, confirm: true))
         try? await Task.sleep(for: .milliseconds(800))
         capture(win, to: url.appending(path: "settings-wine-confirm.png"))
         win.orderOut(nil)
@@ -156,5 +157,24 @@ enum SnapshotRunner {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+}
+
+/// Settings window body with a given pane selected, for snapshots.
+struct SettingsWindowPreview: View {
+    var pane: SettingsPane
+    var confirm = false
+    @State private var sel: SettingsPane?
+    var body: some View {
+        NavigationSplitView {
+            List(SettingsPane.allCases, selection: $sel) { p in
+                Label(p.rawValue, systemImage: p.icon).tag(p)
+            }
+            .navigationSplitViewColumnWidth(180)
+        } detail: {
+            if confirm { WineSettings(previewConfirm: true) } else { pane.content }
+        }
+        .frame(width: 760, height: 540)
+        .onAppear { sel = pane }
     }
 }

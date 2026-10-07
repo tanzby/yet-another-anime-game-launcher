@@ -23,15 +23,22 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     }
 }
 
-/// Style 1: a separate Settings window with toolbar tabs (⌘,).
+/// Style 1 (chosen): a separate Settings window (⌘,) with a sidebar,
+/// like macOS System Settings.
 struct SettingsWindow: View {
+    @State private var pane: SettingsPane? = .general
     var body: some View {
-        TabView {
-            ForEach(SettingsPane.allCases) { pane in
-                Tab(pane.rawValue, systemImage: pane.icon) { pane.content }
+        NavigationSplitView {
+            List(SettingsPane.allCases, selection: $pane) { p in
+                Label(p.rawValue, systemImage: p.icon).tag(p)
             }
+            .navigationSplitViewColumnWidth(180)
+            .toolbar(removing: .sidebarToggle)
+        } detail: {
+            (pane ?? .general).content
+                .navigationTitle(pane?.rawValue ?? "")
         }
-        .frame(width: 560, height: 520)
+        .frame(width: 760, height: 540)
     }
 }
 

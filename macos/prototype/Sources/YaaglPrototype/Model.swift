@@ -3,7 +3,7 @@ import SwiftUI
 
 enum GameState: String, CaseIterable, Identifiable {
     case wineSetup, notInstalled, installing, installPaused, ready,
-         updateAvailable, updating, predownloadAvailable, predownloading,
+         updateAvailable, updating, updatePaused, predownloadAvailable, predownloading,
          repairing, launching, running, error
     var id: String { rawValue }
 
@@ -16,6 +16,7 @@ enum GameState: String, CaseIterable, Identifiable {
         case .ready: "可启动"
         case .updateAvailable: "有更新"
         case .updating: "更新中"
+        case .updatePaused: "更新已暂停"
         case .predownloadAvailable: "可预下载"
         case .predownloading: "预下载中"
         case .repairing: "修复中"
@@ -95,13 +96,13 @@ final class Proto {
 
     var totalGB: Double {
         switch state {
-        case .updating: 12.3
+        case .updating, .updatePaused: 12.3
         case .predownloading: 8.2
         case .wineSetup: 0.42
         default: 62.5
         }
     }
-    var speedText: String { state == .installPaused ? "已暂停" : "23.4 MB/s" }
+    var speedText: String { [.installPaused, .updatePaused].contains(state) ? "已暂停" : "23.4 MB/s" }
     var etaText: String {
         let remaining = (1 - progress) * totalGB * 1024 / 23.4
         let m = Int(remaining / 60)
@@ -115,7 +116,7 @@ final class Proto {
         switch state {
         case .wineSetup: "正在下载 Wine 11.0-1（CrossOver）…"
         case .installing, .installPaused: "正在下载游戏文件 \(newVersion)"
-        case .updating: "正在更新 \(installedVersion) → \(newVersion)"
+        case .updating, .updatePaused: "正在更新 \(installedVersion) → \(newVersion)"
         case .predownloading: "正在预下载 \(predownloadVersion)"
         case .repairing: "正在校验文件 \(Int(progress * 48213)) / 48213"
         case .launching: "正在启动…"
@@ -134,7 +135,8 @@ final class Proto {
         case .ready, .predownloadAvailable, .predownloading:
             .init(title: "开始游戏", systemImage: "play.fill", enabled: true)
         case .updateAvailable: .init(title: "更新游戏", systemImage: "arrow.triangle.2.circlepath", enabled: true, tint: .orange)
-        case .updating: .init(title: "更新中…", systemImage: "hourglass", enabled: false)
+        case .updating: .init(title: "暂停", systemImage: "pause.fill", enabled: true, tint: .gray)
+        case .updatePaused: .init(title: "继续", systemImage: "play.fill", enabled: true)
         case .repairing: .init(title: "修复中…", systemImage: "wrench.and.screwdriver", enabled: false)
         case .launching: .init(title: "启动中…", systemImage: "hourglass", enabled: false)
         case .running: .init(title: "运行中", systemImage: "gamecontroller.fill", enabled: false, tint: .green)
@@ -150,6 +152,8 @@ final class Proto {
         case .installPaused: let p = progress; state = .installing; progress = p
         case .ready, .predownloadAvailable, .predownloading: launch()
         case .updateAvailable: state = .updating
+        case .updating: state = .updatePaused
+        case .updatePaused: let p = progress; state = .updating; progress = p
         case .error: state = .installing
         default: break
         }
@@ -167,7 +171,7 @@ final class Proto {
     func repair() { state = .repairing }
     func forceQuit() { state = .ready }
 
-    var showsProgress: Bool { state.isTransferring || state == .installPaused }
+    var showsProgress: Bool { state.isTransferring || state == .installPaused || state == .updatePaused }
     var showsPredownloadOffer: Bool { state == .predownloadAvailable && !predownloadDone }
 }
 
