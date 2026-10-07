@@ -86,21 +86,18 @@ struct ClassicMain: View {
     }
 }
 
-// MARK: - B: full-width glass bottom bar, notices as cards top-right
+// MARK: - B (chosen): floating Liquid Glass bar, events as system notifications
 
 struct BottomBarMain: View {
     @Environment(Proto.self) private var proto
     var body: some View {
-        ZStack {
-            FakeBackground()
-            GameLogo()
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(32)
+        ZStack(alignment: .bottom) {
+            FakeBackground().ignoresSafeArea()
             notices
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(20)
+                .padding(.top, 52).padding(.trailing, 20)
+            bar.padding(.horizontal, 20).padding(.bottom, 20)
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { bar }
     }
 
     /// Events go to macOS Notification Center (UNUserNotificationCenter in
@@ -119,12 +116,11 @@ struct BottomBarMain: View {
                         Text(n.body).font(.callout).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
-                .padding(12)
+                .padding(14)
                 .frame(width: 340)
-                .background(.regularMaterial, in: .rect(cornerRadius: 16))
-                .shadow(radius: 10)
+                .glassEffect(.regular, in: .rect(cornerRadius: 22))
                 Text("[示意] macOS 系统通知，窗口在后台也会弹出")
-                    .font(.caption2).foregroundStyle(.white.opacity(0.8))
+                    .font(.caption2).foregroundStyle(.white.opacity(0.85)).shadow(radius: 2)
             }
         }
     }
@@ -139,63 +135,81 @@ struct BottomBarMain: View {
     }
 
     /// Persistent state stays in the window; notifications are transient.
-    @ViewBuilder var inlineStatus: some View {
-        switch proto.state {
-        case .updateAvailable:
-            Label("新版本 \(proto.newVersion) · 需下载 12.3 GB", systemImage: "arrow.triangle.2.circlepath")
-                .foregroundStyle(.orange)
-        case .predownloadAvailable:
-            HStack {
-                Label("\(proto.predownloadVersion) 可预下载 · 8.2 GB", systemImage: "tray.and.arrow.down")
-                Button("预下载") { proto.startPredownload() }.controlSize(.regular)
+    @ViewBuilder var status: some View {
+        if proto.showsProgress {
+            ProgressBlock(compact: true)
+        } else {
+            switch proto.state {
+            case .running:
+                Label("游戏运行中 · 已运行 00:12:34", systemImage: "gamecontroller").foregroundStyle(.secondary)
+            case .launching:
+                HStack { ProgressView().controlSize(.small); Text("正在启动 Wine…") }
+            case .updateAvailable:
+                Label("新版本 \(proto.newVersion) · 需下载 12.3 GB", systemImage: "arrow.down.circle")
+                    .foregroundStyle(.orange)
+            case .predownloadAvailable:
+                HStack(spacing: 10) {
+                    Label("\(proto.predownloadVersion) 可预下载 · 8.2 GB", systemImage: "tray.and.arrow.down")
+                    Button("预下载") { proto.startPredownload() }.buttonStyle(.glass)
+                }
+            case .error:
+                HStack(spacing: 10) {
+                    Label("下载失败：网络连接已中断，进度已保留", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.red).lineLimit(1)
+                    Button("查看日志") {}.buttonStyle(.glass)
+                }
+            default:
+                Text(proto.state == .notInstalled ? "约需 62.5 GB 可用空间" : "已是最新版本")
+                    .foregroundStyle(.secondary)
             }
-        case .error:
-            HStack {
-                Label("下载失败：网络连接已中断，进度已保留", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.red).lineLimit(1)
-                Button("查看日志") {}.controlSize(.regular)
-            }
-        default: Spacer()
         }
     }
 
     var bar: some View {
-        HStack(spacing: 20) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("原神 · 国服").font(.headline)
-                Text(proto.state == .notInstalled ? "未安装" : "版本 \(proto.installedVersion) · 62.4 GB")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            .frame(width: 140, alignment: .leading)
-            Group {
-                if proto.showsProgress { ProgressBlock(compact: true) }
-                else if proto.state == .running {
-                    Label("游戏运行中 · 已运行 00:12:34", systemImage: "gamecontroller").foregroundStyle(.secondary)
-                } else if proto.state == .launching {
-                    HStack { ProgressView().controlSize(.small); Text("正在启动 Wine…") }
-                } else { inlineStatus }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 8) {
+        GlassEffectContainer(spacing: 12) {
+            HStack(spacing: 12) {
+                HStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("原神").font(.title3.weight(.semibold))
+                        Text(proto.state == .notInstalled ? "未安装" : "\(proto.installedVersion) · 62.4 GB")
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    .frame(width: 110, alignment: .leading)
+                    Divider().frame(height: 32)
+                    status.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .glassEffect(.regular, in: .capsule)
+
                 Button(action: proto.primaryTapped) {
                     Label(proto.primary.title, systemImage: proto.primary.systemImage)
-                        .font(.title3.bold()).frame(minWidth: 130)
+                        .font(.title3.weight(.semibold))
+                        .frame(minWidth: 140, minHeight: 36)
                 }
-                .buttonStyle(.borderedProminent).tint(proto.primary.tint)
+                .buttonStyle(.glassProminent)
+                .tint(proto.primary.tint)
+                .controlSize(.extraLarge)
                 .disabled(!proto.primary.enabled)
+
                 Menu {
-                    Button("检查文件完整性") { proto.repair() }
-                    Button("打开游戏目录") {}
-                    Button("打开 Wine 命令行") {}
+                    Button("检查文件完整性", systemImage: "checkmark.shield") { proto.repair() }
+                    Button("打开游戏目录", systemImage: "folder") {}
+                    Button("打开 Wine 命令行", systemImage: "terminal") {}
                     Divider()
                     OpenSettingsButton(label: true)
-                } label: { Image(systemName: "ellipsis") }
-                .menuIndicator(.hidden).fixedSize()
+                } label: {
+                    Image(systemName: "ellipsis").font(.title3.weight(.semibold))
+                        .frame(width: 52, height: 52)
+                        .contentShape(.circle)
+                }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .fixedSize()
             }
-            .controlSize(.extraLarge)
         }
-        .padding(.horizontal, 24).padding(.vertical, 14)
-        .background(.ultraThinMaterial)
     }
 }
 

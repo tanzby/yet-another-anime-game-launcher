@@ -19,9 +19,11 @@ struct YaaglPrototypeApp: App {
         Window("Yaagl（原型）", id: "main") {
             RootView()
                 .environment(proto)
+                .transformEnvironment(\.controlActiveState) { if SnapshotRunner.enabled { $0 = .key } }
                 .frame(minWidth: 960, minHeight: 600)
         }
         .defaultSize(width: 1100, height: 660)
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .appInfo) { AboutMenuItem() }
             CommandMenu("原型") {
@@ -49,13 +51,13 @@ struct RootView: View {
     @Environment(Proto.self) private var proto
     var body: some View {
         @Bindable var proto = proto
-        ZStack(alignment: .bottom) {
+        ZStack(alignment: .top) {
             switch proto.variant {
             case .classic: ClassicMain()
             case .bottomBar: BottomBarMain()
             case .sidebar: SidebarMain()
             }
-            if proto.showDebugBar { DebugBar().padding(.bottom, proto.variant == .bottomBar ? 96 : 8) }
+            if proto.showDebugBar { DebugBar().padding(.top, 8) }
         }
         .sheet(isPresented: $proto.showSettingsSheet) { SettingsSheet() }
         .focusable()
@@ -100,19 +102,22 @@ struct DebugBar: View {
 /// settings pane in both styles, then quits.
 @MainActor
 enum SnapshotRunner {
+    static let enabled = ProcessInfo.processInfo.environment["PROTO_SHOTS"] != nil
+
     static func runIfRequested(_ proto: Proto) async {
         guard let dir = ProcessInfo.processInfo.environment["PROTO_SHOTS"] else { return }
         let url = URL(fileURLWithPath: dir)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         proto.showDebugBar = false
-        try? await Task.sleep(for: .seconds(1))
-        let states: [GameState] = [.notInstalled, .installing, .ready, .updateAvailable, .updating,
+        await OfficialArt.shared.load()
+        try? await Task.sleep(for: .seconds(4))   // let AsyncImage fetch
+        let states: [GameState] = [.notInstalled, .installing, .installPaused, .ready, .updateAvailable, .updating, .launching,
                                    .predownloadAvailable, .repairing, .running, .error]
-        for v in MainVariant.allCases {
+        for v in [MainVariant.bottomBar] {
             proto.variant = v
             for s in states {
                 proto.state = s
-                if s.isTransferring || s == .installing { proto.progress = 0.42 }
+                proto.progress = 0.42
                 try? await Task.sleep(for: .milliseconds(400))
                 if let w = NSApp.windows.first(where: { $0.title.hasPrefix("Yaagl") }) {
                     capture(w, to: url.appending(path: "main-\(v.rawValue)-\(s.rawValue).png"))
@@ -148,6 +153,8 @@ enum SnapshotRunner {
     static func capture(_ w: NSWindow, to url: URL) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+        NSApp.activate()
+        w.makeKeyAndOrderFront(nil)
         p.arguments = ["-x", "-o", "-l", String(w.windowNumber), url.path]
         try? p.run(); p.waitUntilExit()
         if !FileManager.default.fileExists(atPath: url.path), let v = w.contentView { save(v, to: url) }

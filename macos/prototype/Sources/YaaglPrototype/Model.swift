@@ -61,7 +61,7 @@ struct PrimaryAction {
 @Observable @MainActor
 final class Proto {
     var state: GameState = .ready { didSet { if oldValue != state { progress = 0 } } }
-    var variant: MainVariant = .classic
+    var variant: MainVariant = .bottomBar
     var settingsStyle: SettingsStyle = .window
     var showSettingsSheet = false
     var showDebugBar = true
@@ -69,9 +69,9 @@ final class Proto {
     var predownloadDone = false
     var errorMessage = "下载 chunk 7f3a9c… 失败：网络连接已中断（NSURLErrorDomain -1005）。已下载的部分会保留，重试会从断点继续。"
 
-    let installedVersion = "5.8.0"
-    let newVersion = "6.0.0"
-    let predownloadVersion = "6.1.0"
+    let installedVersion = "7.0.0"
+    let newVersion = "7.1.0"
+    let predownloadVersion = "7.2.0"
     let installDir = "~/Games/Genshin Impact"
 
     init() {
@@ -175,22 +175,47 @@ final class Proto {
     var showsPredownloadOffer: Bool { state == .predownloadAvailable && !predownloadDone }
 }
 
-/// Stand-in for the game's official background art.
+/// Official launcher art, fetched at runtime from the same endpoint the TS
+/// launcher uses (nothing is committed). Falls back to a gradient offline.
+@Observable @MainActor
+final class OfficialArt {
+    static let shared = OfficialArt()
+    var background: URL?
+    var theme: URL?
+
+    func load() async {
+        guard background == nil,
+              let url = URL(string: "https://hyp-api.mihoyo.com/hyp/hyp-connect/api/getAllGameBasicInfo?launcher_id=jGHBHlcOq1&language=zh-cn"),
+              let (data, _) = try? await URLSession.shared.data(from: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let list = (root["data"] as? [String: Any])?["game_info_list"] as? [[String: Any]],
+              let game = list.first(where: { ($0["game"] as? [String: Any])?["biz"] as? String == "hk4e_cn" }),
+              let bg = (game["backgrounds"] as? [[String: Any]])?.first
+        else { return }
+        background = ((bg["background"] as? [String: Any])?["url"] as? String).flatMap(URL.init(string:))
+        theme = ((bg["theme"] as? [String: Any])?["url"] as? String).flatMap(URL.init(string:))
+    }
+}
+
 struct FakeBackground: View {
+    private let art = OfficialArt.shared
     var body: some View {
         ZStack {
             LinearGradient(colors: [Color(red: 0.36, green: 0.55, blue: 0.85),
                                     Color(red: 0.93, green: 0.78, blue: 0.62)],
                            startPoint: .top, endPoint: .bottom)
-            Image(systemName: "mountain.2.fill")
-                .resizable().scaledToFit()
-                .foregroundStyle(.white.opacity(0.18))
-                .padding(.horizontal, 80).offset(y: 120)
-            Text("[官方背景图]")
-                .font(.caption).foregroundStyle(.white.opacity(0.5))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                .padding(8)
+            layer(art.background)
+            layer(art.theme)
         }
+        .clipped()
+        .task { await art.load() }
+    }
+
+    func layer(_ url: URL?) -> some View {
+        AsyncImage(url: url) { image in
+            image.resizable().aspectRatio(contentMode: .fill)
+        } placeholder: { Color.clear }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
