@@ -10,7 +10,11 @@
  *    camera-turn phase (length YAAGL_GAMEHOST_TURN seconds)
  *    (the turn itself is driven by turner.exe via SendInput);
  *  - screenshots: the previous drawable is copied to a PNG
- *    (YAAGL_GAMEHOST_SHOT_DIR), at the end of each phase.
+ *    (YAAGL_GAMEHOST_SHOT_DIR), at the end of each phase;
+ *  - a screen check (YAAGL_GAMEHOST_DEV=screen): enter the game, then save
+ *    the drawable after each step (hide/unhide, walking, attacking, and a
+ *    control with the window below the menu bar). yaagl-diag captures the
+ *    screen at each "shot:" line and compares the two.
  */
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
@@ -190,6 +194,74 @@ static void autoplay(void) {
   });
 }
 
+static void postKey(unsigned short code, NSString *ch, bool down) {
+  NSEvent *e = [NSEvent keyEventWithType:down ? NSEventTypeKeyDown : NSEventTypeKeyUp location:NSZeroPoint
+                           modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                            windowNumber:gameWindow.windowNumber context:nil characters:ch
+             charactersIgnoringModifiers:ch isARepeat:NO keyCode:code];
+  [NSApp postEvent:e atStart:NO];
+}
+
+static void logWindow(const char *step) {
+  NSRect f = gameWindow.frame;
+  gamehost_say("screen: step=%s fullscreen=%d level=%ld frame=%.0fx%.0f", step,
+               (int)!!(gameWindow.styleMask & NSWindowStyleMaskFullScreen), (long)gameWindow.level,
+               f.size.width, f.size.height);
+}
+
+/* The control step keeps the window below the menu bar, which must show up
+ * as "covered" on a Mac with a notch. */
+static bool holdBelowMenuBar;
+static IMP origSetLevel;
+static void hookSetLevel(NSWindow *self, SEL _cmd, NSInteger level) {
+  if (holdBelowMenuBar && self == gameWindow) level = NSNormalWindowLevel;
+  ((void (*)(id, SEL, NSInteger))origSetLevel)(self, _cmd, level);
+}
+
+/* Each step acts, waits for the picture to settle, then saves the drawable. */
+static void screenCheck(void) {
+  Method m = class_getInstanceMethod([NSWindow class], @selector(setLevel:));
+  origSetLevel = method_setImplementation(m, (IMP)hookSetLevel);
+  for (double t = 3; t < 60; t += 5) after(t, ^{ click(); });
+  struct {
+    double at;
+    const char *name;
+    dispatch_block_t act;
+  } steps[] = {
+      {75, "world", ^{}},
+      {85, "after-hide", ^{
+         [NSApp hide:nil];
+         after(4, ^{
+           [NSApp unhide:nil];
+           [NSApp activateIgnoringOtherApps:YES];
+           [gameWindow makeKeyAndOrderFront:nil];
+         });
+       }},
+      {95, "after-walk", ^{
+         postKey(13, @"w", true);
+         after(2, ^{ postKey(13, @"w", false); });
+       }},
+      {103, "after-attack", ^{
+         for (int i = 0; i < 3; i++) after(i * 0.6, ^{ click(); });
+       }},
+      {111, "control-below-menu-bar", ^{
+         holdBelowMenuBar = true;
+         ((void (*)(id, SEL, NSInteger))origSetLevel)(gameWindow, @selector(setLevel:), NSNormalWindowLevel);
+       }},
+      {119, "restored", ^{ holdBelowMenuBar = false; }},
+  };
+  for (unsigned long i = 0; i < sizeof steps / sizeof *steps; i++) {
+    const char *name = steps[i].name;
+    dispatch_block_t act = steps[i].act;
+    after(steps[i].at - 6, act);
+    after(steps[i].at, ^{
+      logWindow(name);
+      requestShot(name);
+    });
+  }
+  after(124, ^{ gamehost_say("screen: done"); });
+}
+
 void gamehost_dev_start(void *window) {
   static bool started;
   if (started) return;
@@ -200,4 +272,5 @@ void gamehost_dev_start(void *window) {
   gamehost_say("dev: frame stats %s", m ? "on" : "unavailable");
   const char *mode = getenv("YAAGL_GAMEHOST_DEV");
   if (mode && !strcmp(mode, "autoplay")) autoplay();
+  if (mode && !strcmp(mode, "screen")) screenCheck();
 }

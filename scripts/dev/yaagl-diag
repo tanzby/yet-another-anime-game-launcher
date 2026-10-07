@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Text diagnostics for Yaagl's Wine game runs: processes, windows, Game
-Mode, and (watch --autoplay) frame times. `watch` always cleans up the prefix
+Mode, (watch --autoplay) frame times and (watch --screen-check) whether the
+screen shows the whole game picture. `watch` always cleans up the prefix
 and waits for Yaagl to revert its game patches and quit. See
 docs/genshin-macos.md."""
 
@@ -21,6 +22,7 @@ APP = "/Applications/Yaagl.app"
 GAME_EXES = ("YuanShen.exe", "GenshinImpact.exe")
 CACHE = Path.home() / "Library/Caches/yaagl-diag"
 SWIFT_SRC = Path(__file__).resolve().parent / "window-info.swift"
+COMPARE_SRC = Path(__file__).resolve().parent / "screen-compare.swift"
 GAMEHOST_LOG = DATA / "logs/gamehost.log"
 GAMEMODE_PROCS = ("GamePolicyAgent", "gamepolicyd")
 
@@ -196,14 +198,43 @@ def cmd_kill(a):
         kill_prefix(a.prefix)
 
 
-def window_probe(pids):
-    exe = CACHE / "window-info"
-    if not exe.exists() or exe.stat().st_mtime < SWIFT_SRC.stat().st_mtime:
+def swift_tool(src):
+    exe = CACHE / src.stem
+    if not exe.exists() or exe.stat().st_mtime < src.stat().st_mtime:
         CACHE.mkdir(parents=True, exist_ok=True)
-        r = run(["swiftc", "-O", "-o", str(exe), str(SWIFT_SRC)])
+        r = run(["swiftc", "-O", "-o", str(exe), str(src)])
         if r.returncode:
             sys.exit(f"swiftc failed: {r.stderr}")
-    return run([str(exe), *map(str, pids)]).stdout.splitlines()
+    return str(exe)
+
+
+def window_probe(pids):
+    return run([swift_tool(SWIFT_SRC), *map(str, pids)]).stdout.splitlines()
+
+
+class ScreenCheck(threading.Thread):
+    """Captures the screen as soon as gamehost-dev logs a saved drawable
+    ("shot: <dir>/<step>.png ... ok") and compares the two."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.compare = swift_tool(COMPARE_SRC)
+        self.results, self.stop_flag, self.seen = [], False, 0
+
+    def run(self):
+        while not self.stop_flag:
+            lines = read_hostlog().splitlines()
+            for l in lines[self.seen:]:
+                m = re.match(r"shot: (\S+)\.png \d+x\d+ ok", l)
+                if m:
+                    screen = f"{m.group(1)}-screen.png"
+                    run(["screencapture", "-x", screen])
+                    out = run([self.compare, f"{m.group(1)}.png", screen]).stdout.strip()
+                    step = Path(m.group(1)).name
+                    self.results.append((step, out))
+                    say(f"screen-check: step={step} {out}")
+            self.seen = len(lines)
+            time.sleep(0.1)
 
 
 def snapshot(prefix):
@@ -362,19 +393,19 @@ def cmd_watch(a):
         envs += a.env or []
         if a.runtime != "wine":
             envs.append(f"YAAGL_WINE_RUNTIME={DATA / a.runtime}")
-        if a.autoplay:
+        if a.autoplay or a.screen_check:
             # Dev-only pieces are not shipped in the app; build them into the
             # data dir's sidecar (left alone by Yaagl's resource sync).
             build = Path(__file__).resolve().parents[2] / "native/gamehost/build.sh"
             r = run(["sh", str(build), "--dev", str(DATA / "sidecar/gamehost")])
             if r.returncode:
                 sys.exit(f"building dev helpers failed: {r.stderr}")
-            if not (DATA / "sidecar/gamehost/turner.exe").exists():
+            if a.autoplay and not (DATA / "sidecar/gamehost/turner.exe").exists():
                 say("turner.exe missing (set LLVM_MINGW): the camera will not turn")
-            shots = CACHE / "shots"
+            shots = CACHE / "shots" / str(int(time.time()))
             shots.mkdir(parents=True, exist_ok=True)
-            envs += ["YAAGL_GAMEHOST_DEV=autoplay", f"YAAGL_GAMEHOST_SHOT_DIR={shots}",
-                     f"YAAGL_GAMEHOST_TURN={a.turn}"]
+            envs += [f"YAAGL_GAMEHOST_DEV={'screen' if a.screen_check else 'autoplay'}",
+                     f"YAAGL_GAMEHOST_SHOT_DIR={shots}", f"YAAGL_GAMEHOST_TURN={a.turn}"]
         run(["open", *[x for e in envs for x in ("--env", e)], APP])
         say("launched Yaagl with YAAGL_AUTOLAUNCH=1")
     last, seen_game, reason, window_at, closed, turning = None, False, "timeout", None, False, False
@@ -383,6 +414,9 @@ def cmd_watch(a):
     gpu = GpuSampler() if a.autoplay else None
     if gpu:
         gpu.start()
+    check = ScreenCheck() if a.screen_check else None
+    if check:
+        check.start()
     try:
         while time.monotonic() - T0 < a.timeout:
             s = snapshot(a.prefix)
@@ -419,6 +453,9 @@ def cmd_watch(a):
                     turning = True
                 if phase == "done":
                     reason = "autoplay done"; break
+            if check and "screen: done" in hostlog:
+                time.sleep(2)  # let the last capture finish
+                reason = "screen check done"; break
             if a.until == "gamemode" and s["gamemode"] == "on":
                 reason = "gamemode"; break
             if a.until == "fullscreen" and s["fullscreen_space"]:
@@ -451,11 +488,17 @@ def cmd_watch(a):
             else:
                 say("Yaagl exited")
         for l in read_hostlog().splitlines():
-            if l.startswith(("frames:", "shot:", "autoplay:", "dev:")):
+            if l.startswith(("frames:", "shot:", "autoplay:", "dev:", "screen:")):
                 say(l)
         if gpu:
             gpu.stop_flag = True
             gpu.report()
+        if check:
+            check.stop_flag = True
+            for step, out in check.results:
+                say(f"SCREEN step={step} {out}")
+            if not check.results:
+                say("SCREEN no steps captured")
         if restore_grades:
             set_grades(restore_grades)
             say(f"graphics grades restored {restore_grades}")
@@ -484,6 +527,8 @@ def main():
     w.add_argument("--runtime", default="wine", help="Wine runtime directory under the data dir (e.g. wine-gptk4)")
     w.add_argument("--env", action="append", help="extra KEY=VALUE environment for Yaagl and the game")
     w.add_argument("--grade", action="append", help="Genshin custom graphics grade KEY=VALUE for this run (9=1: volumetric fog off)")
+    w.add_argument("--screen-check", action="store_true",
+                   help="enter the game and compare the screen with the game's own picture after each step")
     w.add_argument("--turn", type=float, default=12, help="camera-turn phase length (s) with --autoplay")
     w.add_argument("--verbose", action="store_true", help="stream and print gamepolicyd log lines")
     w.set_defaults(fn=cmd_watch)

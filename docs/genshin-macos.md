@@ -42,6 +42,14 @@ scripts/dev/yaagl-diag kill --orphans
 scripts/dev/yaagl-diag watch --launch --autoplay --timeout 200
 ```
 
+`--screen-check` checks what is actually on screen. It enters the game, then runs these steps: idle in the world, hide and unhide the app, walk, attack, a control with the window held below the menu bar, and restore. After each step the dev companion saves the game's drawable, and yaagl-diag captures the screen at once (`screencapture`, which needs Screen Recording for the calling terminal). `screen-compare.swift` then compares per-row luma profiles and prints `verdict=ok`, `covered` (black over the top strip while the game drew there), `shifted` (best match at a vertical offset), `mismatch` or `size-mismatch`. On a Mac with a notch the control step must report `covered`, which shows the check can fail. The PNGs stay in `~/Library/Caches/yaagl-diag/shots/<time>/`.
+
+```bash
+scripts/dev/yaagl-diag watch --launch --screen-check --timeout 200
+```
+
+Result on 2026-10-07 (14" MacBook Pro, macOS 27.0.1): every step `ok` (top strip luma equal on screen and in the game, body diff ≤ 1.8, offset 0), and the control `covered` (top luma 0 on screen vs 87 in the game).
+
 Measured on 2026-10-04 (M5 Pro, DXMT, native full screen, fast continuous turn):
 
 | Retina | Phase | fps | p99 | Max | Hitches > 50 ms |
