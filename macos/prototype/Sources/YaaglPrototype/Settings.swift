@@ -3,7 +3,7 @@
 import SwiftUI
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general = "通用", game = "游戏", wine = "Wine", advanced = "高级", about = "关于"
+    case general = "通用", game = "游戏", wine = "Wine", advanced = "高级"
     var id: String { rawValue }
     var icon: String {
         switch self {
@@ -11,7 +11,6 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .game: "gamecontroller"
         case .wine: "wineglass"
         case .advanced: "exclamationmark.triangle"
-        case .about: "info.circle"
         }
     }
     @MainActor @ViewBuilder var content: some View {
@@ -20,7 +19,6 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .game: GameSettings()
         case .wine: WineSettings()
         case .advanced: AdvancedSettings()
-        case .about: AboutSettings()
         }
     }
 }
@@ -199,21 +197,40 @@ struct AdvancedSettings: View {
     }
 }
 
-struct AboutSettings: View {
+/// "关于 Yaagl" is its own small window from the app menu, not a settings tab.
+struct AboutWindow: View {
     var body: some View {
-        Form {
-            Section {
-                LabeledContent("Yaagl", value: "1.0.0 (prototype)")
-                LabeledContent("Wine", value: "11.0-1 CrossOver")
-                LabeledContent("DXMT", value: "v0.70")
+        VStack(spacing: 14) {
+            Image(systemName: "gamecontroller.fill")
+                .font(.system(size: 40)).foregroundStyle(.white)
+                .frame(width: 72, height: 72)
+                .background(.blue.gradient, in: .rect(cornerRadius: 16))
+            VStack(spacing: 2) {
+                Text("Yaagl").font(.title2.bold())
+                Text("版本 1.0.0 (prototype)").foregroundStyle(.secondary)
             }
-            Section("开源许可") {
-                DisclosureGroup("steam.exe 与 lsteamclient.dll（Valve, BSD-3-Clause）") {
-                    Text("Copyright (c) 2015-2022 Valve Corporation. All rights reserved. …").font(.caption)
+            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
+                GridRow { Text("Wine").foregroundStyle(.secondary); Text("11.0-1 CrossOver") }
+                GridRow { Text("DXMT").foregroundStyle(.secondary); Text("v0.70") }
+            }
+            .font(.callout)
+            Divider()
+            DisclosureGroup("开源许可") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("steam.exe 与 lsteamclient.dll — Valve, BSD-3-Clause")
+                    Text("Sparkle — MIT")
+                    Text("DXMT — …")
                 }
-                DisclosureGroup("Sparkle（MIT）") { Text("…").font(.caption) }
+                .font(.caption).frame(maxWidth: .infinity, alignment: .leading)
             }
+            HStack {
+                Link("GitHub", destination: URL(string: "https://github.com/tanzby/yet-another-anime-game-launcher")!)
+                Spacer()
+                Button("检查更新…") {}
+            }
+            .font(.callout)
         }
-        .formStyle(.grouped)
+        .padding(24)
+        .frame(width: 340)
     }
 }

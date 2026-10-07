@@ -23,6 +23,7 @@ struct YaaglPrototypeApp: App {
         }
         .defaultSize(width: 1100, height: 660)
         .commands {
+            CommandGroup(replacing: .appInfo) { AboutMenuItem() }
             CommandMenu("原型") {
                 Button(proto.showDebugBar ? "隐藏调试条" : "显示调试条") { proto.showDebugBar.toggle() }
                     .keyboardShortcut("d")
@@ -31,7 +32,17 @@ struct YaaglPrototypeApp: App {
         Settings {
             SettingsWindow()
         }
+        Window("关于 Yaagl", id: "about") {
+            AboutWindow()
+        }
+        .windowResizability(.contentSize)
+        .windowStyle(.hiddenTitleBar)
     }
+}
+
+struct AboutMenuItem: View {
+    @Environment(\.openWindow) private var openWindow
+    var body: some View { Button("关于 Yaagl") { openWindow(id: "about") } }
 }
 
 struct RootView: View {
@@ -118,6 +129,12 @@ enum SnapshotRunner {
             try? await Task.sleep(for: .milliseconds(500))
             capture(win, to: url.appending(path: "settings-\(pane).png"))
         }
+        win.title = ""
+        win.contentView = NSHostingView(rootView: AboutWindow())
+        win.setContentSize(win.contentView!.fittingSize)
+        try? await Task.sleep(for: .milliseconds(500))
+        capture(win, to: url.appending(path: "about-window.png"))
+        win.setContentSize(NSSize(width: 560, height: 560))
         win.title = "Wine"
         win.contentView = NSHostingView(rootView: WineSettings(previewConfirm: true).frame(width: 560, height: 560))
         try? await Task.sleep(for: .milliseconds(800))
