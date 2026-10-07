@@ -161,7 +161,8 @@ static void hookAdjust(id self, SEL _cmd, unsigned long behavior) {
 /* AppKit lays out a native full-screen window below the camera housing (the
  * screen's safe area). These private NSWindow getters give that frame; the
  * game window gets the whole screen instead. The tile getters are needed too,
- * or the window falls back below the notch when it is ordered front again. */
+ * or the window falls back below the notch when it is ordered front again.
+ * A split-view tile is narrower than the screen and is left alone. */
 static struct {
   const char *name;
   SEL sel;
@@ -171,18 +172,23 @@ static struct {
                   {.name = "_fullScreenTileFrame"},
                   {.name = "_visibleTileFrameForFullScreen"}};
 static Rect hookFullScreenFrame(id self, SEL _cmd) {
-  id screen = self == fullscreenTarget ? sendId(self, "screen") : NULL;
-  if (screen) return sendRect(screen, "frame");
   unsigned long i = 0;
   while (frameHooks[i].sel != _cmd) i++;
-  return ((Rect(*)(id, SEL))frameHooks[i].orig)(self, _cmd);
+  Rect frame = ((Rect(*)(id, SEL))frameHooks[i].orig)(self, _cmd);
+  id screen = self == fullscreenTarget ? sendId(self, "screen") : NULL;
+  if (!screen) return frame;
+  Rect s = sendRect(screen, "frame");
+  return frame.w < s.w ? frame : s;
 }
 
 /* On a Mac with a notch the menu bar window (level 24) stays on screen over
  * the top of a full-screen Space, drawn black, and so covers the top of the
- * game. winemac decides window levels in minimumLevelForActive:; while it is
- * active and in full screen on such a screen, the game window goes above the
- * menu bar. */
+ * game. winemac decides window levels in minimumLevelForActive:; while the app
+ * is active and the window is in full screen on such a screen, the game window
+ * goes above the menu bar. winemac's adjustWindowLevels never puts a window
+ * below one behind it, so windows the game orders in front stay above it, and
+ * when another app (e.g. the game's browser process) becomes active, winemac
+ * lowers the game window again. */
 #define MAIN_MENU_LEVEL 24
 static bool aboveMenuBar(id win) {
   if (win != fullscreenTarget || !(sendUL(win, "styleMask") & STYLE_FULLSCREEN)) return false;
@@ -194,13 +200,27 @@ static long hookMinLevel(id self, SEL _cmd, signed char active) {
   long level = ((long (*)(id, SEL, signed char))origMinLevel)(self, _cmd, active);
   return active && level <= MAIN_MENU_LEVEL && aboveMenuBar(self) ? MAIN_MENU_LEVEL + 1 : level;
 }
-/* Entering full screen doesn't make winemac recompute the levels. */
-static void keepAboveMenuBar(id app) {
-  if (!origMinLevel || !sendBool(app, "isActive") || !aboveMenuBar(fullscreenTarget)) return;
-  long level = (long)sendUL(fullscreenTarget, "level");
-  if (level > MAIN_MENU_LEVEL) return;
-  ((void (*)(id, SEL, long))msgSend)(fullscreenTarget, selName("setLevel:"), MAIN_MENU_LEVEL + 1);
-  say("gamehost: raised the full-screen window above the menu bar (level %ld)", level);
+/* winemac recomputes the levels when windows are ordered or the app is
+ * (de)activated, not when the window enters or leaves full screen, so ask it
+ * then. Until the full-screen transition is over, the window is not on the
+ * current Space and winemac skips it, so raising is retried: every tick for
+ * a few ticks, then every LEVEL_BACKOFF ticks. */
+#define LEVEL_RETRIES 10
+#define LEVEL_BACKOFF 10
+static bool wantAbove;
+static int levelRetries;
+static void updateLevel(id app) {
+  if (!origMinLevel) return;
+  bool want = sendBool(app, "isActive") && aboveMenuBar(fullscreenTarget);
+  bool above = (long)sendUL(fullscreenTarget, "level") > MAIN_MENU_LEVEL;
+  if (want != wantAbove) say("gamehost: full-screen window %s the menu bar", want ? "goes above" : "goes back below");
+  if (want != wantAbove || above) levelRetries = 0;
+  bool retry = want && !above && (levelRetries++ < LEVEL_RETRIES || levelRetries % LEVEL_BACKOFF == 0);
+  if (retry || (!want && wantAbove)) {
+    id controller = sendId(getClass("WineApplicationController"), "sharedController");
+    ((void (*)(id, SEL))msgSend)(controller, selName("adjustWindowLevels"));
+  }
+  wantAbove = want;
 }
 
 /* After the game window is closed the process should exit; if it is still
@@ -234,7 +254,7 @@ static void tick(void *ctx) {
   if (fullscreenTarget) {
     if (targetPresent(windows, n)) {
       goneSince = 0;
-      keepAboveMenuBar(app);
+      updateLevel(app);
       return; /* in full screen, or the user chose to leave it */
     }
     if (!goneSince) {

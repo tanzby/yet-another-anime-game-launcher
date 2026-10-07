@@ -126,6 +126,21 @@ def wine_bin(runtime="wine"):
     return str(DATA / runtime / "bin/wine")
 
 
+def wine(a, *args, wait=False):
+    """Runs a program in the watched prefix; in the background unless `wait`."""
+    cmd = [wine_bin(a.runtime), *map(str, args)]
+    env = {**os.environ, "WINEPREFIX": a.prefix, "WINEDEBUG": "-all"}
+    if wait:
+        run(cmd, env=env)
+    else:
+        subprocess.Popen(cmd, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def kv(line):
+    """The key=value pairs of a log or probe line."""
+    return dict(re.findall(r"(\w+)=(\S+)", line))
+
+
 def read_hostlog():
     try:
         return GAMEHOST_LOG.read_text(errors="replace")
@@ -213,27 +228,59 @@ def window_probe(pids):
 
 
 class ScreenCheck(threading.Thread):
-    """Captures the screen as soon as gamehost-dev logs a saved drawable
-    ("shot: <dir>/<step>.png ... ok") and compares the two."""
+    """Follows gamehost-dev's screen check: captures the display the game is on
+    as soon as a drawable is saved ("shot: <dir>/<step>.png ... ok") and
+    compares the two, and opens another Wine program's window for the
+    other-window step."""
 
-    def __init__(self):
+    def __init__(self, a):
         super().__init__(daemon=True)
+        self.a = a
         self.compare = swift_tool(COMPARE_SRC)
-        self.results, self.stop_flag, self.seen = [], False, 0
+        self.results, self.step = [], {}
+        self.done = threading.Event()  # set after the last step's line
+
+    def result(self, step, out):
+        self.results.append((step, out))
+        say(f"screen-check: step={step} {out}")
+
+    def report(self):
+        for step, out in self.results:
+            say(f"SCREEN step={step} {out}")
+        if not self.results:
+            say("SCREEN no steps captured")
+
+    def other_window(self, step):
+        """The game must drop below the other window: inactive, level <= 24,
+        and the other window on screen."""
+        procs = prefix_procs(self.a.prefix)
+        others = [l for l in window_probe([p["pid"] for p in procs if not is_game(p)])
+                  if l.startswith("window")]
+        ok = others and step["active"] == "0" and int(step["level"]) <= 24
+        self.result("other-window", f"verdict={'ok' if ok else 'fail'} other_windows={len(others)} "
+                    f"game_active={step['active']} game_level={step['level']}")
+        wine(self.a, "taskkill", "/im", "notepad.exe", wait=True)
 
     def run(self):
-        while not self.stop_flag:
+        seen = 0
+        while not self.done.is_set():
             lines = read_hostlog().splitlines()
-            for l in lines[self.seen:]:
+            for l in lines[seen:]:
+                if l.startswith("screen: step="):
+                    self.step = kv(l)
+                    if self.step["step"] == "other-window":
+                        self.other_window(self.step)
+                elif l == "screen: open-other":
+                    wine(self.a, "notepad")
+                elif l == "screen: done":
+                    self.done.set()
                 m = re.match(r"shot: (\S+)\.png \d+x\d+ ok", l)
                 if m:
                     screen = f"{m.group(1)}-screen.png"
-                    run(["screencapture", "-x", screen])
-                    out = run([self.compare, f"{m.group(1)}.png", screen]).stdout.strip()
-                    step = Path(m.group(1)).name
-                    self.results.append((step, out))
-                    say(f"screen-check: step={step} {out}")
-            self.seen = len(lines)
+                    run(["screencapture", "-x", "-D", self.step["display"], screen])
+                    out = run([self.compare, f"{m.group(1)}.png", screen, self.step["strip"]]).stdout.strip()
+                    self.result(Path(m.group(1)).name, out)
+            seen = len(lines)
             time.sleep(0.1)
 
 
@@ -244,7 +291,7 @@ def snapshot(prefix):
     wins = [l for l in lines if l.startswith("window")]
     covers = False
     for w in wins:
-        m = dict(re.findall(r"(\w+)=(\S+)", w))
+        m = kv(w)
         try:
             covers |= (int(float(m["w"])), int(float(m["h"]))) in screens
         except (KeyError, ValueError):
@@ -388,6 +435,7 @@ def cmd_watch(a):
         restore_grades = set_grades(changes)
         say(f"graphics grades set {changes} (was {restore_grades})")
     gm = GameModeLog(log_path) if a.verbose else None
+    check = ScreenCheck(a) if a.screen_check else None  # builds its compare tool before the launch
     if a.launch:
         envs = ["YAAGL_AUTOLAUNCH=1"]
         envs += a.env or []
@@ -404,8 +452,9 @@ def cmd_watch(a):
                 say("turner.exe missing (set LLVM_MINGW): the camera will not turn")
             shots = CACHE / "shots" / str(int(time.time()))
             shots.mkdir(parents=True, exist_ok=True)
-            envs += [f"YAAGL_GAMEHOST_DEV={'screen' if a.screen_check else 'autoplay'}",
-                     f"YAAGL_GAMEHOST_SHOT_DIR={shots}", f"YAAGL_GAMEHOST_TURN={a.turn}"]
+            envs += [f"YAAGL_GAMEHOST_SHOT_DIR={shots}"]
+            envs += (["YAAGL_GAMEHOST_DEV=screen"] if a.screen_check else
+                     ["YAAGL_GAMEHOST_DEV=autoplay", f"YAAGL_GAMEHOST_TURN={a.turn}"])
         run(["open", *[x for e in envs for x in ("--env", e)], APP])
         say("launched Yaagl with YAAGL_AUTOLAUNCH=1")
     last, seen_game, reason, window_at, closed, turning = None, False, "timeout", None, False, False
@@ -414,7 +463,6 @@ def cmd_watch(a):
     gpu = GpuSampler() if a.autoplay else None
     if gpu:
         gpu.start()
-    check = ScreenCheck() if a.screen_check else None
     if check:
         check.start()
     try:
@@ -434,9 +482,7 @@ def cmd_watch(a):
             if a.close_after is not None and window_at and not closed \
                     and time.monotonic() - window_at >= a.close_after:
                 # Graceful close (WM_CLOSE), like the user closing the game window.
-                subprocess.Popen([wine_bin(a.runtime), "taskkill", "/im", s["game"]],
-                                 env={**os.environ, "WINEPREFIX": a.prefix},
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                wine(a, "taskkill", "/im", s["game"])
                 say(f"closing game window ({s['game']})")
                 closed = True
             if a.until == "window" and s["windows"]:
@@ -446,15 +492,12 @@ def cmd_watch(a):
                 if phase == "turn" and not turning:
                     # Turn the camera from inside Wine, like a real mouse.
                     turner = DATA / "sidecar/gamehost/turner.exe"
-                    subprocess.Popen([wine_bin(a.runtime), str(turner), str(a.turn)],
-                                     env={**os.environ, "WINEPREFIX": a.prefix, "WINEDEBUG": "-all"},
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    wine(a, turner, a.turn)
                     say("turning camera (turner.exe)")
                     turning = True
                 if phase == "done":
                     reason = "autoplay done"; break
-            if check and "screen: done" in hostlog:
-                time.sleep(2)  # let the last capture finish
+            if check and check.done.is_set():
                 reason = "screen check done"; break
             if a.until == "gamemode" and s["gamemode"] == "on":
                 reason = "gamemode"; break
@@ -494,11 +537,8 @@ def cmd_watch(a):
             gpu.stop_flag = True
             gpu.report()
         if check:
-            check.stop_flag = True
-            for step, out in check.results:
-                say(f"SCREEN step={step} {out}")
-            if not check.results:
-                say("SCREEN no steps captured")
+            check.done.set()
+            check.report()
         if restore_grades:
             set_grades(restore_grades)
             say(f"graphics grades restored {restore_grades}")
@@ -533,6 +573,8 @@ def main():
     w.add_argument("--verbose", action="store_true", help="stream and print gamepolicyd log lines")
     w.set_defaults(fn=cmd_watch)
     a = ap.parse_args()
+    if getattr(a, "screen_check", False) and (not a.launch or a.autoplay):
+        ap.error("--screen-check needs --launch and cannot be combined with --autoplay")
     a.fn(a)
 
 

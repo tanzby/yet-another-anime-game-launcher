@@ -1,12 +1,14 @@
 // Compares what the game rendered (its drawable, saved by gamehost-dev) with
 // what is on screen, as `key=value` text for yaagl-diag.
-// Usage: screen-compare <drawable.png> <screen.png>
+// Usage: screen-compare <drawable.png> <screen.png> <strip px>
 //
-// Both images are reduced to a per-row mean luma profile. The screen should
-// show the whole drawable at the same place: a black strip over the top
-// means something covers the game; a best match at a vertical offset means
-// the picture is shifted or cropped; a size difference means the window is
-// not the size of the screen.
+// Both images are reduced to a per-row mean luma profile; a drawable smaller
+// than the screen with the same aspect ratio (Retina off) is scaled to the
+// screen's height. The screen should show the whole drawable at the same
+// place: a black strip over the top <strip> rows (the screen's top safe-area
+// inset) means something covers the game; a best match at a vertical offset
+// means the picture is shifted or cropped; a different aspect ratio means the
+// window is not the shape of the screen.
 import AppKit
 
 func rowLuma(_ path: String) -> (w: Int, h: Int, rows: [Double])? {
@@ -44,32 +46,45 @@ func diff(_ s: [Double], _ d: [Double], _ range: Range<Int>, offset: Int) -> Dou
   return n > 0 ? sum / n : .infinity
 }
 
+/// `rows` resampled (linearly) to `count` rows.
+func resample(_ rows: [Double], to count: Int) -> [Double] {
+  (0..<count).map { y in
+    let p = (Double(y) + 0.5) * Double(rows.count) / Double(count) - 0.5
+    let i = max(0, min(rows.count - 1, Int(p.rounded(.down)))), j = min(rows.count - 1, i + 1)
+    let t = max(0, p - Double(i))
+    return rows[i] * (1 - t) + rows[j] * t
+  }
+}
+
 let args = CommandLine.arguments
-guard args.count == 3, let d = rowLuma(args[1]), let s = rowLuma(args[2]) else {
+guard args.count == 4, let drawable = rowLuma(args[1]), let s = rowLuma(args[2]), let strip = Double(args[3])
+else {
   print("verdict=error reason=unreadable")
   exit(1)
 }
-guard d.w == s.w, d.h == s.h else {
-  print("verdict=size-mismatch drawable=\(d.w)x\(d.h) screen=\(s.w)x\(s.h)")
+guard abs(Double(drawable.w) / Double(drawable.h) - Double(s.w) / Double(s.h)) < 0.01 else {
+  print("verdict=size-mismatch drawable=\(drawable.w)x\(drawable.h) screen=\(s.w)x\(s.h)")
   exit(0)
 }
-let top = 0..<min(66, s.h)  // the notch / menu bar strip on a 14" MacBook Pro (33 pt)
+let game = drawable.h == s.h ? drawable.rows : resample(drawable.rows, to: s.h)
+let top = 0..<min(max(Int(strip), 1), s.h)
 let body = 100..<(s.h - 100)
-var best = 0
-for off in -120...120 where diff(s.rows, d.rows, body, offset: off) < diff(s.rows, d.rows, body, offset: best) {
-  best = off
+var best = 0, bestDiff = Double.infinity
+for off in -120...120 {
+  let d = diff(s.rows, game, body, offset: off)
+  if d < bestDiff { (best, bestDiff) = (off, d) }
 }
-let topScreen = mean(s.rows[top]), topDrawable = mean(d.rows[top])
-let topDiff = diff(s.rows, d.rows, top, offset: 0), bodyDiff = diff(s.rows, d.rows, body, offset: 0)
+let topScreen = mean(s.rows[top]), topDrawable = mean(game[top])
+let topDiff = diff(s.rows, game, top, offset: 0), bodyDiff = diff(s.rows, game, body, offset: 0)
 let verdict: String
 if topScreen < 3 && topDrawable > 10 {
   verdict = "covered"
-} else if abs(best) > 3 {
+} else if abs(best) > 3 && bestDiff <= 20 {
   verdict = "shifted"
 } else if topDiff > 20 || bodyDiff > 20 {
   verdict = "mismatch"
 } else {
   verdict = "ok"
 }
-print(String(format: "verdict=%@ size=%dx%d top_luma_screen=%.0f top_luma_game=%.0f top_diff=%.1f body_diff=%.1f best_offset=%d",
-  verdict, s.w, s.h, topScreen, topDrawable, topDiff, bodyDiff, best))
+print(String(format: "verdict=%@ size=%dx%d drawable=%dx%d strip=%d top_luma_screen=%.0f top_luma_game=%.0f top_diff=%.1f body_diff=%.1f best_offset=%d",
+  verdict, s.w, s.h, drawable.w, drawable.h, top.count, topScreen, topDrawable, topDiff, bodyDiff, best))
