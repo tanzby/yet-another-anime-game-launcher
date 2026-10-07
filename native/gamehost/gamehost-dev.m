@@ -10,7 +10,10 @@
  *    camera-turn phase (length YAAGL_GAMEHOST_TURN seconds)
  *    (the turn itself is driven by turner.exe via SendInput);
  *  - screenshots: the previous drawable is copied to a PNG
- *    (YAAGL_GAMEHOST_SHOT_DIR), at the end of each phase.
+ *    (YAAGL_GAMEHOST_SHOT_DIR), at the end of each phase;
+ *  - a screen check (YAAGL_GAMEHOST_DEV=screen): enter the game, then save
+ *    the drawable after each step (see screenCheck). yaagl-diag captures the
+ *    screen at each "shot:" line and compares the two.
  */
 #import <AppKit/AppKit.h>
 #import <ImageIO/ImageIO.h>
@@ -159,15 +162,21 @@ static void click(void) {
   after(0.08, ^{ postMouse(NSEventTypeLeftMouseUp); });
 }
 
-/* Autoplay: clicks every 5s for CLICK_FOR seconds (enters the game from the
- * title screen and dismisses popups), waits SETTLE seconds, then measures
- * IDLE seconds standing still and the turn phase. */
+/* Click into the window every 5 s for ENTER_SECONDS: enters the game from the
+ * title screen and dismisses popups. */
+#define ENTER_SECONDS 60
+static void enterGame(void) {
+  for (double t = 3; t < ENTER_SECONDS; t += 5) after(t, ^{ click(); });
+}
+
+/* Autoplay: enters the game, waits SETTLE seconds, then measures IDLE
+ * seconds standing still and the turn phase. */
 static void autoplay(void) {
-  const double clickFor = 60, settle = 20, idle = 10;
+  const double settle = 20, idle = 10;
   const char *turnEnv = getenv("YAAGL_GAMEHOST_TURN");
   double turn = turnEnv && *turnEnv ? atof(turnEnv) : 12;
-  for (double t = 3; t < clickFor; t += 5) after(t, ^{ click(); });
-  double t0 = clickFor + settle;
+  enterGame();
+  double t0 = ENTER_SECONDS + settle;
   after(t0, ^{
     gamehost_say("autoplay: idle phase");
     resetFrames();
@@ -190,6 +199,89 @@ static void autoplay(void) {
   });
 }
 
+static void postKey(unsigned short code, NSString *ch, bool down) {
+  NSEvent *e = [NSEvent keyEventWithType:down ? NSEventTypeKeyDown : NSEventTypeKeyUp location:NSZeroPoint
+                           modifierFlags:0 timestamp:NSProcessInfo.processInfo.systemUptime
+                            windowNumber:gameWindow.windowNumber context:nil characters:ch
+             charactersIgnoringModifiers:ch isARepeat:NO keyCode:code];
+  [NSApp postEvent:e atStart:NO];
+}
+
+/* strip: the screen's top safe-area inset in pixels; display: its number for
+ * `screencapture -D`. */
+static void logWindow(const char *step) {
+  NSRect f = gameWindow.frame;
+  NSScreen *screen = gameWindow.screen;
+  CGDirectDisplayID screenID = [screen.deviceDescription[@"NSScreenNumber"] unsignedIntValue], ids[16];
+  uint32_t n = 0, display = 1;
+  CGGetActiveDisplayList(16, ids, &n);
+  for (uint32_t i = 0; i < n; i++)
+    if (ids[i] == screenID) display = i + 1;
+  gamehost_say("screen: step=%s fullscreen=%d active=%d level=%ld frame=%.0fx%.0f strip=%.0f display=%u", step,
+               (int)!!(gameWindow.styleMask & NSWindowStyleMaskFullScreen), (int)NSApp.isActive,
+               (long)gameWindow.level, f.size.width, f.size.height,
+               screen.safeAreaInsets.top * screen.backingScaleFactor, display);
+}
+
+/* The control step keeps the window below the menu bar, which must show up
+ * as "covered" on a Mac with a notch. The hook is only in place during it. */
+static IMP origSetLevel;
+static void hookSetLevel(NSWindow *self, SEL _cmd, NSInteger level) {
+  if (self == gameWindow) level = NSNormalWindowLevel;
+  ((void (*)(id, SEL, NSInteger))origSetLevel)(self, _cmd, level);
+}
+
+/* Each step acts, waits `settle` seconds for the picture, then saves the
+ * drawable. */
+static void screenCheck(void) {
+  Method setLevel = class_getInstanceMethod([NSWindow class], @selector(setLevel:));
+  enterGame();
+  struct {
+    double settle;
+    const char *name;
+    dispatch_block_t act;
+  } steps[] = {
+      {0, "world", ^{}},
+      {6, "after-hide", ^{
+         [NSApp hide:nil];
+         after(4, ^{
+           [NSApp unhide:nil];
+           [NSApp activateIgnoringOtherApps:YES];
+           [gameWindow makeKeyAndOrderFront:nil];
+         });
+       }},
+      {6, "after-walk", ^{
+         postKey(13, @"w", true);
+         after(2, ^{ postKey(13, @"w", false); });
+       }},
+      {6, "after-attack", ^{
+         for (int i = 0; i < 3; i++) after(i * 0.6, ^{ click(); });
+       }},
+      {6, "control-below-menu-bar", ^{
+         origSetLevel = method_setImplementation(setLevel, (IMP)hookSetLevel);
+         [gameWindow setLevel:NSNormalWindowLevel];
+       }},
+      {6, "restored", ^{ method_setImplementation(setLevel, origSetLevel); }},
+  };
+  double t = ENTER_SECONDS + 15;
+  for (unsigned long i = 0; i < sizeof steps / sizeof *steps; i++) {
+    const char *name = steps[i].name;
+    after(t, steps[i].act);
+    after(t + steps[i].settle, ^{
+      logWindow(name);
+      requestShot(name);
+    });
+    t += steps[i].settle + 2;
+  }
+  /* Last, as the game stays in the background after it (an app in the
+   * background may not activate itself): yaagl-diag opens a window of
+   * another Wine program at "open-other", checks at the step line that it is
+   * on screen and the game below it, then closes it. */
+  after(t, ^{ gamehost_say("screen: open-other"); });
+  after(t + 6, ^{ logWindow("other-window"); });
+  after(t + 7, ^{ gamehost_say("screen: done"); });
+}
+
 void gamehost_dev_start(void *window) {
   static bool started;
   if (started) return;
@@ -200,4 +292,5 @@ void gamehost_dev_start(void *window) {
   gamehost_say("dev: frame stats %s", m ? "on" : "unavailable");
   const char *mode = getenv("YAAGL_GAMEHOST_DEV");
   if (mode && !strcmp(mode, "autoplay")) autoplay();
+  if (mode && !strcmp(mode, "screen")) screenCheck();
 }

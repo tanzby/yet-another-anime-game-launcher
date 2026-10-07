@@ -2,7 +2,8 @@
  * yaagl-gamehost: injected into the game's Wine process (wine-shim.c sets
  * DYLD_INSERT_LIBRARIES for it only) to put the game window into a native
  * macOS full-screen Space, which is what macOS Game Mode requires. Wine's mac driver only offers native full screen
- * for resizable windows, and the game's window is not.
+ * for resizable windows, and the game's window is not. In full screen the
+ * window covers the notch area too (see hookFullScreenFrame, hookMinLevel).
  *
  * Links only libSystem: the Wine host must not load AppKit early, so all
  * Objective-C access goes through the runtime, resolved after winemac.so
@@ -38,6 +39,7 @@ typedef void *Class;
 typedef void *Method;
 typedef void (*IMP)(void);
 typedef struct { double x, y, w, h; } Rect;
+typedef struct { double top, left, bottom, right; } Insets;
 
 #define FULLSCREEN_PRIMARY (1UL << 7)
 #define FULLSCREEN_AUXILIARY (1UL << 8)
@@ -48,6 +50,8 @@ static SEL (*selName)(const char *);
 static Method (*instanceMethod)(Class, SEL);
 static IMP (*setImpl)(Method, IMP);
 static IMP (*classImpl)(Class, SEL);
+static signed char (*addMethod)(Class, SEL, IMP, const char *);
+static const char *(*typeEncoding)(Method);
 static void *msgSend, *msgSendStret;
 static id *nsApp;
 
@@ -154,6 +158,71 @@ static void hookAdjust(id self, SEL _cmd, unsigned long behavior) {
   ((void (*)(id, SEL, unsigned long))origAdjust)(self, _cmd, behavior);
 }
 
+/* AppKit lays out a native full-screen window below the camera housing (the
+ * screen's safe area). These private NSWindow getters give that frame; the
+ * game window gets the whole screen instead. The tile getters are needed too,
+ * or the window falls back below the notch when it is ordered front again.
+ * A split-view tile is narrower than the screen and is left alone. */
+static struct {
+  const char *name;
+  SEL sel;
+  IMP orig;
+} frameHooks[] = {{.name = "_frameForFullScreenMode"},
+                  {.name = "_tileFrameForFullScreen"},
+                  {.name = "_fullScreenTileFrame"},
+                  {.name = "_visibleTileFrameForFullScreen"}};
+static Rect hookFullScreenFrame(id self, SEL _cmd) {
+  unsigned long i = 0;
+  while (frameHooks[i].sel != _cmd) i++;
+  Rect frame = ((Rect(*)(id, SEL))frameHooks[i].orig)(self, _cmd);
+  id screen = self == fullscreenTarget ? sendId(self, "screen") : NULL;
+  if (!screen) return frame;
+  Rect s = sendRect(screen, "frame");
+  return frame.w < s.w ? frame : s;
+}
+
+/* On a Mac with a notch the menu bar window (level 24) stays on screen over
+ * the top of a full-screen Space, drawn black, and so covers the top of the
+ * game. winemac decides window levels in minimumLevelForActive:; while the app
+ * is active and the window is in full screen on such a screen, the game window
+ * goes above the menu bar. winemac's adjustWindowLevels never puts a window
+ * below one behind it, so windows the game orders in front stay above it, and
+ * when another app (e.g. the game's browser process) becomes active, winemac
+ * lowers the game window again. */
+#define MAIN_MENU_LEVEL 24
+static bool aboveMenuBar(id win) {
+  if (win != fullscreenTarget || !(sendUL(win, "styleMask") & STYLE_FULLSCREEN)) return false;
+  id screen = sendId(win, "screen");
+  return screen && ((Insets(*)(id, SEL))msgSendStret)(screen, selName("safeAreaInsets")).top > 0;
+}
+static IMP origMinLevel;
+static long hookMinLevel(id self, SEL _cmd, signed char active) {
+  long level = ((long (*)(id, SEL, signed char))origMinLevel)(self, _cmd, active);
+  return active && level <= MAIN_MENU_LEVEL && aboveMenuBar(self) ? MAIN_MENU_LEVEL + 1 : level;
+}
+/* winemac recomputes the levels when windows are ordered or the app is
+ * (de)activated, not when the window enters or leaves full screen, so ask it
+ * then. Until the full-screen transition is over, the window is not on the
+ * current Space and winemac skips it, so raising is retried: every tick for
+ * a few ticks, then every LEVEL_BACKOFF ticks. */
+#define LEVEL_RETRIES 10
+#define LEVEL_BACKOFF 10
+static bool wantAbove;
+static int levelRetries;
+static void updateLevel(id app) {
+  if (!origMinLevel) return;
+  bool want = sendBool(app, "isActive") && aboveMenuBar(fullscreenTarget);
+  bool above = (long)sendUL(fullscreenTarget, "level") > MAIN_MENU_LEVEL;
+  if (want != wantAbove) say("gamehost: full-screen window %s the menu bar", want ? "goes above" : "goes back below");
+  if (want != wantAbove || above) levelRetries = 0;
+  bool retry = want && !above && (levelRetries++ < LEVEL_RETRIES || levelRetries % LEVEL_BACKOFF == 0);
+  if (retry || (!want && wantAbove)) {
+    id controller = sendId(getClass("WineApplicationController"), "sharedController");
+    ((void (*)(id, SEL))msgSend)(controller, selName("adjustWindowLevels"));
+  }
+  wantAbove = want;
+}
+
 /* After the game window is closed the process should exit; if it is still
  * around this long, it is stuck in shutdown and only keeps Wine alive. The
  * launcher cannot time this out itself: its wait on steam.exe only returns
@@ -185,6 +254,7 @@ static void tick(void *ctx) {
   if (fullscreenTarget) {
     if (targetPresent(windows, n)) {
       goneSince = 0;
+      updateLevel(app);
       return; /* in full screen, or the user chose to leave it */
     }
     if (!goneSince) {
@@ -272,10 +342,12 @@ static void install(void) {
   instanceMethod = dlsym(RTLD_DEFAULT, "class_getInstanceMethod");
   setImpl = dlsym(RTLD_DEFAULT, "method_setImplementation");
   classImpl = dlsym(RTLD_DEFAULT, "class_getMethodImplementation");
+  addMethod = dlsym(RTLD_DEFAULT, "class_addMethod");
+  typeEncoding = dlsym(RTLD_DEFAULT, "method_getTypeEncoding");
   msgSend = dlsym(RTLD_DEFAULT, "objc_msgSend");
   msgSendStret = dlsym(RTLD_DEFAULT, "objc_msgSend_stret");
   nsApp = dlsym(RTLD_DEFAULT, "NSApp");
-  if (!getClass || !msgSend || !msgSendStret || !nsApp) {
+  if (!getClass || !msgSend || !msgSendStret || !nsApp || !addMethod || !typeEncoding) {
     say("gamehost: objc runtime not available");
     return;
   }
@@ -286,6 +358,21 @@ static void install(void) {
   }
   Method m = instanceMethod(wineWindowClass, selName("adjustFullScreenBehavior:"));
   if (m) origAdjust = setImpl(m, (IMP)hookAdjust);
+  Method ml = instanceMethod(wineWindowClass, selName("minimumLevelForActive:"));
+  if (ml) origMinLevel = setImpl(ml, (IMP)hookMinLevel);
+  else say("gamehost: minimumLevelForActive: missing");
+  for (unsigned long i = 0; i < sizeof frameHooks / sizeof *frameHooks; i++) {
+    SEL sel = frameHooks[i].sel = selName(frameHooks[i].name);
+    Method f = instanceMethod(wineWindowClass, sel);
+    if (!f) {
+      say("gamehost: %s missing", frameHooks[i].name);
+      continue;
+    }
+    /* Override in WineWindow, leaving NSWindow's implementation to other windows. */
+    frameHooks[i].orig = classImpl(wineWindowClass, sel);
+    if (!addMethod(wineWindowClass, sel, (IMP)hookFullScreenFrame, typeEncoding(f)))
+      frameHooks[i].orig = setImpl(f, (IMP)hookFullScreenFrame);
+  }
   dispatch_source_t timer =
       dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
   dispatch_source_set_timer(timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC),
