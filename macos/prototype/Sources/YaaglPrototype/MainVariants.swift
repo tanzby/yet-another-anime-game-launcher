@@ -5,11 +5,14 @@ struct OpenSettingsButton: View {
     @Environment(Proto.self) private var proto
     @Environment(\.openSettings) private var openSettings
     var label: Bool = false
+    var iconSide: CGFloat? = nil
     var body: some View {
         Button {
             if proto.settingsStyle == .window { openSettings() } else { proto.showSettingsSheet = true }
         } label: {
-            if label { Label("设置", systemImage: "gearshape") } else { Image(systemName: "gearshape.fill") }
+            if label { Label("设置", systemImage: "gearshape") } else {
+                Image(systemName: "gearshape.fill").frame(width: iconSide, height: iconSide)
+            }
         }
     }
 }
@@ -57,9 +60,9 @@ struct ClassicMain: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                HStack(spacing: 0) {
+                HStack(spacing: 6) {
                     Button(action: proto.primaryTapped) {
-                        Text(proto.primary.title).font(.title2.bold()).frame(minWidth: 150, minHeight: 44)
+                        Text(proto.primary.title).font(.title2.bold()).frame(minWidth: 150).frame(height: 44)
                     }
                     .buttonStyle(.borderedProminent).tint(proto.primary.tint)
                     .disabled(!proto.primary.enabled)
@@ -67,8 +70,8 @@ struct ClassicMain: View {
                         Button("预下载 \(proto.predownloadVersion)（8.2 GB）") { proto.startPredownload() }
                             .buttonStyle(.borderless).padding()
                     }
-                    OpenSettingsButton()
-                        .font(.title2).frame(width: 44, height: 44)
+                    OpenSettingsButton(iconSide: 44)
+                        .font(.title2)
                         .buttonStyle(.borderedProminent).tint(.white.opacity(0.85)).foregroundStyle(.black)
                         .disabled(proto.state == .running)
                 }
