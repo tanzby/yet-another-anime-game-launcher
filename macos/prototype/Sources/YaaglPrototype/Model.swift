@@ -134,12 +134,12 @@ final class Proto {
         case .installPaused: .init(title: "继续", systemImage: "play.fill", enabled: true)
         case .ready, .predownloadAvailable, .predownloading:
             .init(title: "开始游戏", systemImage: "play.fill", enabled: true)
-        case .updateAvailable: .init(title: "更新游戏", systemImage: "arrow.triangle.2.circlepath", enabled: true, tint: .orange)
+        case .updateAvailable: .init(title: "更新游戏", systemImage: "arrow.triangle.2.circlepath", enabled: true)
         case .updating: .init(title: "暂停", systemImage: "pause.fill", enabled: true)
         case .updatePaused: .init(title: "继续", systemImage: "play.fill", enabled: true)
         case .repairing: .init(title: "修复中…", systemImage: "wrench.and.screwdriver", enabled: false)
         case .launching: .init(title: "启动中…", systemImage: "hourglass", enabled: false)
-        case .running: .init(title: "运行中", systemImage: "gamecontroller.fill", enabled: false, tint: .green)
+        case .running: .init(title: "运行中", systemImage: "gamecontroller.fill", enabled: false)
         case .error: .init(title: "重试", systemImage: "arrow.clockwise", enabled: true)
         }
     }

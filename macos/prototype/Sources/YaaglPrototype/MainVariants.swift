@@ -146,7 +146,6 @@ struct BottomBarMain: View {
                 HStack { ProgressView().controlSize(.small); Text("正在启动 Wine…") }
             case .updateAvailable:
                 Label("新版本 \(proto.newVersion) · 需下载 12.3 GB", systemImage: "arrow.down.circle")
-                    .foregroundStyle(.orange)
             case .predownloadAvailable:
                 HStack(spacing: 10) {
                     Label("\(proto.predownloadVersion) 可预下载 · 8.2 GB", systemImage: "tray.and.arrow.down")
