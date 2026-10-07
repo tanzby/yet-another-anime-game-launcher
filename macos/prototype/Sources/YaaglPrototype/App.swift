@@ -118,6 +118,10 @@ enum SnapshotRunner {
             try? await Task.sleep(for: .milliseconds(500))
             capture(win, to: url.appending(path: "settings-\(pane).png"))
         }
+        win.title = "Wine"
+        win.contentView = NSHostingView(rootView: WineSettings(previewConfirm: true).frame(width: 560, height: 560))
+        try? await Task.sleep(for: .milliseconds(800))
+        capture(win, to: url.appending(path: "settings-wine-confirm.png"))
         win.orderOut(nil)
         NSApp.terminate(nil)
     }

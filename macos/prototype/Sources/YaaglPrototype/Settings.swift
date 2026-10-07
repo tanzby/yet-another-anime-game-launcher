@@ -146,16 +146,20 @@ struct GameSettings: View {
 }
 
 struct WineSettings: View {
-    @State private var version = "11.0-1-crossover-signed-experimental"
+    /// Snapshot mode opens the confirmation directly.
+    var previewConfirm = false
+    @State private var installed = "11.0-1-crossover-signed-experimental"
+    @State private var selection = "11.0-1-crossover-signed-experimental"
+    @State private var confirming = false
     var body: some View {
         Form {
             Section {
-                Picker("Wine 版本", selection: $version) {
+                // Picking a version asks right away; no separate "apply" button.
+                Picker("Wine 版本", selection: $selection) {
                     Text("11.0-1 CrossOver（推荐）").tag("11.0-1-crossover-signed-experimental")
                     Text("10.4 CrossOver").tag("10.4")
                 }
-                LabeledContent("当前已安装", value: "11.0-1 CrossOver")
-                Button("切换到所选版本…") {}
+                .onChange(of: selection) { _, new in if new != installed { confirming = true } }
             } footer: {
                 Text("切换会重新下载 Wine 并重建前缀，大约需要几分钟。").font(.caption).foregroundStyle(.secondary)
             }
@@ -165,6 +169,13 @@ struct WineSettings: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { if previewConfirm { selection = "10.4"; confirming = true } }
+        .alert("切换到 10.4 CrossOver？", isPresented: $confirming) {
+            Button("切换并重启 Yaagl") { installed = selection }
+            Button("取消", role: .cancel) { selection = installed }
+        } message: {
+            Text("会重新下载 Wine（约 420 MB）并重建前缀，游戏文件不受影响。切换期间不能启动游戏。")
+        }
     }
 }
 
