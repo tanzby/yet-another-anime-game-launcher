@@ -49,6 +49,8 @@ static SEL (*selName)(const char *);
 static Method (*instanceMethod)(Class, SEL);
 static IMP (*setImpl)(Method, IMP);
 static IMP (*classImpl)(Class, SEL);
+static signed char (*addMethod)(Class, SEL, IMP, const char *);
+static const char *(*typeEncoding)(Method);
 static void *msgSend, *msgSendStret;
 static id *nsApp;
 
@@ -156,23 +158,23 @@ static void hookAdjust(id self, SEL _cmd, unsigned long behavior) {
 }
 
 /* AppKit lays out a native full-screen window below the camera housing (the
- * screen's safe area), which leaves a black strip along the top of a Mac with
- * a notch, and the game renders at the full display size anyway. These
- * private NSWindow getters give the full-screen frame and tile; the game
- * window gets the whole screen instead. The tile getters are needed too:
- * with only the first, the window falls back below the notch when it is
- * ordered front again (e.g. after the app is hidden). */
-static const char *frameSelNames[] = {"_frameForFullScreenMode", "_tileFrameForFullScreen",
-                                      "_fullScreenTileFrame", "_visibleTileFrameForFullScreen"};
-#define FRAME_SELS (sizeof frameSelNames / sizeof *frameSelNames)
-static SEL frameSels[FRAME_SELS];
-static IMP frameOrigs[FRAME_SELS];
+ * screen's safe area). These private NSWindow getters give that frame; the
+ * game window gets the whole screen instead. The tile getters are needed too,
+ * or the window falls back below the notch when it is ordered front again. */
+static struct {
+  const char *name;
+  SEL sel;
+  IMP orig;
+} frameHooks[] = {{.name = "_frameForFullScreenMode"},
+                  {.name = "_tileFrameForFullScreen"},
+                  {.name = "_fullScreenTileFrame"},
+                  {.name = "_visibleTileFrameForFullScreen"}};
 static Rect hookFullScreenFrame(id self, SEL _cmd) {
   id screen = self == fullscreenTarget ? sendId(self, "screen") : NULL;
   if (screen) return sendRect(screen, "frame");
-  for (unsigned long i = 0; i < FRAME_SELS; i++)
-    if (frameSels[i] == _cmd) return ((Rect(*)(id, SEL))frameOrigs[i])(self, _cmd);
-  return (Rect){0, 0, 0, 0};
+  unsigned long i = 0;
+  while (frameHooks[i].sel != _cmd) i++;
+  return ((Rect(*)(id, SEL))frameHooks[i].orig)(self, _cmd);
 }
 
 /* After the game window is closed the process should exit; if it is still
@@ -293,10 +295,12 @@ static void install(void) {
   instanceMethod = dlsym(RTLD_DEFAULT, "class_getInstanceMethod");
   setImpl = dlsym(RTLD_DEFAULT, "method_setImplementation");
   classImpl = dlsym(RTLD_DEFAULT, "class_getMethodImplementation");
+  addMethod = dlsym(RTLD_DEFAULT, "class_addMethod");
+  typeEncoding = dlsym(RTLD_DEFAULT, "method_getTypeEncoding");
   msgSend = dlsym(RTLD_DEFAULT, "objc_msgSend");
   msgSendStret = dlsym(RTLD_DEFAULT, "objc_msgSend_stret");
   nsApp = dlsym(RTLD_DEFAULT, "NSApp");
-  if (!getClass || !msgSend || !msgSendStret || !nsApp) {
+  if (!getClass || !msgSend || !msgSendStret || !nsApp || !addMethod || !typeEncoding) {
     say("gamehost: objc runtime not available");
     return;
   }
@@ -307,11 +311,17 @@ static void install(void) {
   }
   Method m = instanceMethod(wineWindowClass, selName("adjustFullScreenBehavior:"));
   if (m) origAdjust = setImpl(m, (IMP)hookAdjust);
-  unsigned long frameHooks = 0;
-  for (unsigned long i = 0; i < FRAME_SELS; i++) {
-    frameSels[i] = selName(frameSelNames[i]);
-    Method f = instanceMethod(wineWindowClass, frameSels[i]);
-    if (f) frameOrigs[i] = setImpl(f, (IMP)hookFullScreenFrame), frameHooks++;
+  for (unsigned long i = 0; i < sizeof frameHooks / sizeof *frameHooks; i++) {
+    SEL sel = frameHooks[i].sel = selName(frameHooks[i].name);
+    Method f = instanceMethod(wineWindowClass, sel);
+    if (!f) {
+      say("gamehost: %s missing", frameHooks[i].name);
+      continue;
+    }
+    /* Override in WineWindow, leaving NSWindow's implementation to other windows. */
+    frameHooks[i].orig = classImpl(wineWindowClass, sel);
+    if (!addMethod(wineWindowClass, sel, (IMP)hookFullScreenFrame, typeEncoding(f)))
+      frameHooks[i].orig = setImpl(f, (IMP)hookFullScreenFrame);
   }
   dispatch_source_t timer =
       dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
@@ -319,8 +329,7 @@ static void install(void) {
                             NSEC_PER_SEC / 2, NSEC_PER_SEC / 10);
   dispatch_source_set_event_handler_f(timer, tick);
   dispatch_resume(timer);
-  say("gamehost: installed in pid %d (adjust hook %s, full-screen frame hooks %lu/%lu)", getpid(),
-      m ? "on" : "missing", frameHooks, FRAME_SELS);
+  say("gamehost: installed in pid %d (adjust hook %s)", getpid(), m ? "on" : "missing");
 }
 
 static void onImage(const struct mach_header *mh, intptr_t slide) {
