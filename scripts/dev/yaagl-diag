@@ -444,7 +444,7 @@ def cmd_watch(a):
         if a.autoplay or a.screen_check:
             # Dev-only pieces are not shipped in the app; build them into the
             # data dir's sidecar (left alone by Yaagl's resource sync).
-            build = Path(__file__).resolve().parents[2] / "native/gamehost/build.sh"
+            build = Path(__file__).resolve().parents[2] / "macos/Helpers/build.sh"
             r = run(["sh", str(build), "--dev", str(DATA / "sidecar/gamehost")])
             if r.returncode:
                 sys.exit(f"building dev helpers failed: {r.stderr}")

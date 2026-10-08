@@ -46,3 +46,15 @@ jobs:
           pnpm exec tsc
           pnpm run format-check
           pnpm run lint
+
+  macos:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Swift test and app build
+        run: scripts/dev/macos-check

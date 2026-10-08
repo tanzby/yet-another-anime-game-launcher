@@ -279,7 +279,7 @@ PATH_LAUNCH="$(dirname "$CONTENTS_DIR")" exec "$SCRIPT_DIR/${appname}" --path="$
   });
   // Game Mode helpers (native full screen + game app identity)
   await execa("sh", [
-    path.resolve(process.cwd(), "native", "gamehost", "build.sh"),
+    path.resolve(process.cwd(), "macos", "Helpers", "build.sh"),
     path.resolve(sidecarDst, "gamehost"),
   ]);
   // Remove protonextras for hkrpg

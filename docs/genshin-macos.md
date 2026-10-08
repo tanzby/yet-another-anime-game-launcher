@@ -9,9 +9,9 @@ macOS enables Game Mode only when **both** hold for the front process, as decide
 
 Implementation (setting "Native full screen + Game Mode", on by default, `config_game_mode`):
 
-- `src/wine/game-host.ts` installs `native/gamehost/wine-shim.c` as `<wine>/lib/wine/x86_64-unix/wine` and keeps the original host as `wine-host`. Wine execs that path for every new Windows process. When `argv[1]` contains the game executable, the shim execs `YaaglGame.app/Contents/MacOS/wine` instead. That file is a copy of `wine-host` in a bundle registered with `lsregister`. All other processes run `wine-host` unchanged.
+- `src/wine/game-host.ts` installs `macos/Helpers/wine-shim.c` as `<wine>/lib/wine/x86_64-unix/wine` and keeps the original host as `wine-host`. Wine execs that path for every new Windows process. When `argv[1]` contains the game executable, the shim execs `YaaglGame.app/Contents/MacOS/wine` instead. That file is a copy of `wine-host` in a bundle registered with `lsregister`. All other processes run `wine-host` unchanged.
 - The bundle copy is re-signed with `-i com.3shain.yaagl.game`. If the code-signing identifier differs from the bundle identifier, every `getaddrinfo` in the process stalls for about 35 s.
-- `native/gamehost/gamehost.c` is injected into the game process only. The shim sets `DYLD_INSERT_LIBRARIES` from `YAAGL_GAME_HOST_DYLIB` when it execs the game and clears it for the game's child processes. It links only libSystem and attaches once `winemac.so` is loaded. It does five things:
+- `macos/Helpers/gamehost.c` is injected into the game process only. The shim sets `DYLD_INSERT_LIBRARIES` from `YAAGL_GAME_HOST_DYLIB` when it execs the game and clears it for the game's child processes. It links only libSystem and attaches once `winemac.so` is loaded. It does five things:
   - moves the game window (at least half the screen) into a native full-screen Space;
   - makes that window cover the whole screen, notch area included. On a Mac with a notch, a native full-screen Space showed a black strip along the top (33 pt on a 14" MacBook Pro), for two reasons:
     - AppKit lays out the window below the camera housing (1512×949 of 1512×982 pt) while the game renders at the full display size. `setFrame:` cannot get past this, because AppKit clamps the frame again. gamehost overrides four private `NSWindow` getters for the game window, `_frameForFullScreenMode` and the three full-screen tile frames, to return the screen frame. With only the first one, the window falls back below the notch when it is ordered front again, for example after the app is hidden.
@@ -36,7 +36,7 @@ scripts/dev/yaagl-diag ps
 scripts/dev/yaagl-diag kill --orphans
 ```
 
-`--autoplay` loads `native/gamehost/gamehost-dev.m` into the game (`YAAGL_GAMEHOST_DEV`). It clicks into the world, then logs frame-interval statistics for an idle phase and a camera-turn phase (`frames: … p50/p99/max, hitches50`) and saves a PNG of each from the game's own drawable. The turn is driven by `turner.exe` (`SendInput` inside the prefix). Synthetic AppKit events do not turn the camera. These dev pieces are not shipped in the app: `--autoplay` builds them with `native/gamehost/build.sh --dev` into the data dir's sidecar. `turner.exe` needs llvm-mingw (`LLVM_MINGW=/path`).
+`--autoplay` loads `macos/Helpers/gamehost-dev.m` into the game (`YAAGL_GAMEHOST_DEV`). It clicks into the world, then logs frame-interval statistics for an idle phase and a camera-turn phase (`frames: … p50/p99/max, hitches50`) and saves a PNG of each from the game's own drawable. The turn is driven by `turner.exe` (`SendInput` inside the prefix). Synthetic AppKit events do not turn the camera. These dev pieces are not shipped in the app: `--autoplay` builds them with `macos/Helpers/build.sh --dev` into the data dir's sidecar. `turner.exe` needs llvm-mingw (`LLVM_MINGW=/path`).
 
 ```bash
 scripts/dev/yaagl-diag watch --launch --autoplay --timeout 200
