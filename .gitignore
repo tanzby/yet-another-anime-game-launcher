@@ -44,3 +44,9 @@ server_secret.ts
 /.claude/*
 !/.claude/settings.json
 /pnpm-workspace.yaml
+
+# Native app (macos/): XcodeGen output and build products
+/macos/*.xcodeproj
+/macos/.build
+/macos/build
+/macos/.swiftpm

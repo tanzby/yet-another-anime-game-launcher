@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Yaagl is a macOS launcher for anime games. It runs the Windows game through a modified Wine with DXMT, using TypeScript, SolidJS and Vite on NeutralinoJS, with native helpers in `native/`. This repo is the fork `tanzby/yet-another-anime-game-launcher` of upstream `yaagl/` (3Shain); PRs target this fork's `main`.
+Yaagl is a macOS launcher for anime games. It runs the Windows game through a modified Wine with DXMT, using TypeScript, SolidJS and Vite on NeutralinoJS, with native helpers in `macos/Helpers/`. This repo is the fork `tanzby/yet-another-anime-game-launcher` of upstream `yaagl/` (3Shain); PRs target this fork's `main`.
 
 ## Workflow: one worktree per change
 
@@ -26,6 +26,8 @@ git worktree remove .claude/worktrees/<name>   # after merge, then git branch -D
 - Checks are the `pre-push` jobs in `lefthook.yml`, the same ones CI runs. Tests: `node_modules/.bin/vitest run --threads false`.
 - Dev run: `pnpm start` (CN Genshin) or `pnpm run start-<channel>`. To build the app: `YAAGL_CHANNEL_CLIENT=hk4ecn node build-app.js`, which needs `sophon_server/build` from `./build-sophon.sh`.
 - Call tools as `node_modules/.bin/<tool>` rather than `pnpm exec`. pnpm 11's pre-exec dependency check can fail on unapproved build scripts.
+
+- Native app (`macos/`): `scripts/dev/macos-check` runs `swift test`, then `xcodegen generate` and `xcodebuild` (needs Xcode 26+ and `brew install xcodegen`). It is the `macos` job in CI and `pre-push`. The layout follows `docs/adr/0002-native-architecture.md`.
 
 ## Architecture
 

@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "@utils";
 
-// Native helpers built from native/gamehost (see build.sh).
+// Native helpers built from macos/Helpers (see build.sh).
 const SHIM = "./sidecar/gamehost/yaagl-wine-shim";
 const DYLIB = "./sidecar/gamehost/yaagl-gamehost.dylib";
 const BUNDLE = "./YaaglGame.app";

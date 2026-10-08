@@ -25,3 +25,6 @@ pre-push:
       run: node_modules/.bin/prettier -c ./src
     - name: lint
       run: node_modules/.bin/eslint ./src --ext .ts --ext .tsx
+    - name: macos
+      glob: "macos/**"
+      run: scripts/dev/macos-check
