@@ -13,7 +13,7 @@ _Avoid_: 安装路径、gamedir
 _Avoid_: 应用目录、support 目录
 
 **Native Marker**:
-数据目录里 `state.json` 的 `schemaVersion`，表示这个目录属于原生版。没有它就触发首启清场。
+数据目录里 `.yaagl-native` 文件，表示这个目录属于原生版。没有这个文件就触发首启清场。
 _Avoid_: 版本文件
 
 **Job**:
@@ -21,7 +21,7 @@ _Avoid_: 版本文件
 _Avoid_: 任务、task（task 留给 Swift 并发）
 
 **Pending Job**:
-被暂停或被中断、还没完成的作业，记录种类和目标版本。重启后主按钮显示「继续」。
+被暂停或被中断、还没完成的作业，记录种类和目标版本，存在游戏目录的 `.yaagl-tmp/job.json`。重启后主按钮显示「继续」。
 _Avoid_: 断点
 
 **ldiff**:
@@ -37,7 +37,7 @@ _Avoid_: 预更新
 _Avoid_: patch、补丁
 
 **Mutations Journal**:
-记录 Launch Mutations 所需还原项的小文件，改动前写入，还原后删除；崩溃后据此恢复。
+记录 Launch Mutations 所需还原项（文件改名、注册表原值、DXMT DLL）的小文件，改动前写入，还原后删除；崩溃后据此恢复。
 _Avoid_: patched 标记
 
 **Hosts Blocklist**:
